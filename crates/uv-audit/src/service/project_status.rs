@@ -1,12 +1,5 @@
 //! Auditing for [PEP 792] adverse project statuses.
 //!
-//! For each registry-hosted project in the lockfile, we query its parent
-//! index's Simple Repository API for the project-level status marker. If
-//! the index reports a non-`Active` status (archived, quarantined, or
-//! deprecated), we surface it as an adverse-status finding.
-//!
-//! Queries are issued through [`uv_client::RegistryClient`].
-//!
 //! [PEP 792]: https://peps.python.org/pep-0792/
 
 use std::sync::Arc;
