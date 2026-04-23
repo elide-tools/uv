@@ -10,6 +10,10 @@
 
 In reverse chronological order:
 
+- (2026-04-23) — `feat: gate global tracing-subscriber install`
+  - `crates/uv/Cargo.toml`: added feature `install-tracing-subscriber` to `[features]`, default-on. Threaded into `default = [...]` alongside existing defaults.
+  - `crates/uv/src/logging.rs`: `setup_logging` now has two impls — the real one gated by `#[cfg(feature = "install-tracing-subscriber")]`, and a stub that returns `Ok(())` when the feature is off. The stub lets tracing events continue to emit through the macros without installing a global subscriber, so the embedder can own the subscriber and receive uv events alongside other emitters (orogene, Elide, …).
+
 - (2026-04-23) — `fix(uv-extract): disambiguate .compat() to FuturesAsyncReadCompatExt`
   - `crates/uv-extract/src/stream.rs:196`: replaced `entry.reader_mut().compat()` with `FuturesAsyncReadCompatExt::compat(entry.reader_mut())`.
   - Reason: under WHIPLASH's toolchain (nightly-2026-04-15), both `futures::AsyncReadExt::compat` and `tokio_util::compat::FuturesAsyncReadCompatExt::compat` are in scope at the call site, yielding `E0034: multiple applicable items in scope`. uv's pinned stable `1.94.1` accepted the ambiguous call; newer strictness rejects it. Explicit trait-path disambiguation resolves without changing behavior (the intent is futures-AsyncRead → tokio-AsyncRead, which is the `FuturesAsyncReadCompatExt` direction).
