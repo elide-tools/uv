@@ -32,7 +32,7 @@ There is no `manage_python_downloads` boolean argument at this fork point — th
 
 ## Known build issues
 
-None recorded at fork time. Build verification was deferred to Task 3 (toolchain alignment pass). If a build issue is discovered during Task 3, it will be recorded here.
+None. Standalone build (`cargo build -p uv`) verified clean on 2026-04-23 using rustc 1.94.1 (as pinned in this fork's `rust-toolchain.toml`). Cold build completed in approximately 1m 37s. WHIPLASH pins `nightly-2026-04-15`, which is newer than `1.94.1`; no toolchain pin relaxation was required.
 
 ## Sync procedure
 
