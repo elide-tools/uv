@@ -1,0 +1,42 @@
+# Elide fork of uv
+
+- **Upstream:** https://github.com/astral-sh/uv
+- **Upstream commit at fork:** d46a7b67b0dacdc4d8b989fa66fff90ae06e47fd
+- **Upstream commit date:** 2026-04-23 16:17:32 +0000
+- **Forked on:** 2026-04-23
+- **Fork purpose:** embedded as `pypi` resolver in WHIPLASH (`crates/resolvers`).
+
+## Elide-applied patches
+
+None yet. Patches will be listed here as they are applied, in reverse chronological order.
+
+## Known constraints
+
+- `uv::main()` constructs its own tokio `Runtime` and must NOT be called from inside another tokio runtime. WHIPLASH works around this by running `pypi::run` on a non-runtime thread.
+- Eventual programmatic API (library-level sync/install calls) will require forking out this constraint.
+
+## Entrypoint signature
+
+As of d46a7b67b0dacdc4d8b989fa66fff90ae06e47fd, uv exposes:
+
+```rust
+pub unsafe fn main<I, T>(args: I) -> ExitCode
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+```
+
+Defined in `crates/uv/src/lib.rs` at line 2725. The function is generic over any iterator of `OsString`-convertible items. The `unsafe` requirement is documented as: "It is only safe to call this routine when it is known that multiple threads are not running" (due to `std::env::set_var` on startup). WHIPLASH must call this from a dedicated non-runtime thread and must ensure no other threads are active at the point of the call.
+
+There is no `manage_python_downloads` boolean argument at this fork point — the signature is purely `(args: I) -> ExitCode`. Python download management is controlled via CLI flags in `args` instead.
+
+## Known build issues
+
+None recorded at fork time. Build verification was deferred to Task 3 (toolchain alignment pass). If a build issue is discovered during Task 3, it will be recorded here.
+
+## Sync procedure
+
+```bash
+git fetch upstream
+git merge upstream/main
+```
