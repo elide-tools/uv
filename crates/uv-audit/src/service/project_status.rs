@@ -137,28 +137,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn active_is_not_adverse() {
-        assert_eq!(to_adverse(Status::Active), None);
-    }
-
-    #[test]
-    fn archived_maps() {
-        assert_eq!(to_adverse(Status::Archived), Some(AdverseStatus::Archived));
-    }
-
-    #[test]
-    fn quarantined_maps() {
-        assert_eq!(
-            to_adverse(Status::Quarantined),
-            Some(AdverseStatus::Quarantined)
-        );
-    }
-
-    #[test]
-    fn deprecated_maps() {
-        assert_eq!(
-            to_adverse(Status::Deprecated),
-            Some(AdverseStatus::Deprecated)
-        );
+    fn status_to_adverse_mapping() {
+        let cases = [
+            (Status::Active, None),
+            (Status::Archived, Some(AdverseStatus::Archived)),
+            (Status::Quarantined, Some(AdverseStatus::Quarantined)),
+            (Status::Deprecated, Some(AdverseStatus::Deprecated)),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(to_adverse(input), expected);
+        }
     }
 }
