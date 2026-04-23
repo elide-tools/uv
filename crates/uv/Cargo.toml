@@ -161,8 +161,16 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "uv-distribution/static", "test-defaults"]
+default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber"]
 native-auth = []
+
+# Install a global `tracing_subscriber` during `logging::setup_logging`.
+# When disabled, `setup_logging` returns early without calling `.init()` —
+# tracing events still emit through the macros, but no global subscriber
+# is installed, so the embedder's own subscriber receives them. Required
+# for embedded uv alongside other tracing-emitting crates (Elide, orogene,
+# ...) that share a single process-wide subscriber.
+install-tracing-subscriber = []
 # Use better memory allocators, etc.
 performance = ["performance-memory-allocator"]
 performance-memory-allocator = ["dep:uv-performance-memory-allocator"]

@@ -30,6 +30,23 @@ pub(crate) enum Level {
 /// The [`Level`] is used to dictate the default filters (which can be overridden by the `RUST_LOG`
 /// environment variable) along with the formatting of the output. For example, [`Level::Verbose`]
 /// includes targets and timestamps, along with all `uv=debug` messages by default.
+/// No-op stub when the `install-tracing-subscriber` feature is disabled.
+///
+/// Tracing events continue to emit through the macros; the embedder is
+/// expected to install its own global `tracing_subscriber` that receives
+/// them. This form is used when uv runs alongside other tracing-emitting
+/// crates (orogene, Elide) that must share a single subscriber.
+#[cfg(not(feature = "install-tracing-subscriber"))]
+pub(crate) fn setup_logging(
+    _level: Level,
+    _durations_layer: Option<impl Layer<Registry> + Send + Sync>,
+    _color: ColorChoice,
+    _detailed_logging: bool,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(feature = "install-tracing-subscriber")]
 pub(crate) fn setup_logging(
     level: Level,
     durations_layer: Option<impl Layer<Registry> + Send + Sync>,
