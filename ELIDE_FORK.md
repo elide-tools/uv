@@ -10,6 +10,14 @@
 
 In reverse chronological order:
 
+- (2026-04-23) — `feat: gate publish/tool/audit/init/self subcommands`
+  - Five independent, default-on Cargo features; each can be toggled off to drop the associated CLI surface and (where applicable) sub-crate from the dependency graph.
+  - **`publish`**: gates `uv publish` subcommand. When off, `uv-publish` drops from the dep graph. Gated: `Commands::Publish` in `uv-cli/src/lib.rs`; `PublishArgs` struct; `PublishSettings` in `settings.rs`; dispatch arm in `lib.rs`; `commands/publish/` module; `PublishReporter` struct + `uv_publish::Reporter` impl in `commands/reporters.rs` (including `DistFilename` import).
+  - **`tool`**: gates `uv tool` namespace (install/run/uvx/uninstall/list/upgrade/dir). When off, `uv-tool` drops from the dep graph. Gated: `Commands::Tool`, `ToolNamespace`, all `ToolCommand` variants and arg structs in `uv-cli/src/lib.rs`; tool dispatch arms in `lib.rs`; tool settings structs in `settings.rs`; `commands/tool/` modules; `uv_tool::Error` variant in `commands/project/mod.rs`; `InstalledTools` import + usage in `commands/pip/operations.rs`.
+  - **`audit`**: gates `uv audit` subcommand. When off, `uv-audit` drops from the dep graph. Gated: `ProjectCommand::Audit` variant and `AuditArgs` in `uv-cli/src/lib.rs`; audit dispatch arm in `lib.rs`; `AuditSettings` in `settings.rs`; `commands/project/audit` module declaration in `commands/project/mod.rs`.
+  - **`init`**: gates `uv init` subcommand; no dedicated sub-crate drop. Gated: `ProjectCommand::Init` variant and `InitArgs` struct in `uv-cli/src/lib.rs`; init dispatch arm in `lib.rs`; `InitSettings` / `InitKind` / `InitProjectKind` in `settings.rs`; `commands/project/init` module.
+  - **`self-commands`**: gates the entire `uv self` namespace (`uv self version` always; `uv self update` only when `self-update` is also on). Gated: `Commands::Self_`, `SelfNamespace`, `SelfCommand` enum in `uv-cli/src/lib.rs`; self dispatch arms in `lib.rs`; `is_user_level_command` helper. `self-update` now declares `self-commands` as a prerequisite. Removed now-dead `install_source.rs` module (the catch-all `SelfCommand::_` arm it served was unreachable in all feature combinations and was removed).
+
 - (2026-04-23) — `feat(python-managed): feature gate Python download/install management`
   - `crates/uv/Cargo.toml`: added `python-managed` to `[features]`, default-on. Propagates to `uv-cli` and `uv-python` sub-features.
   - `crates/uv-cli/Cargo.toml`: added `python-managed = []` feature.

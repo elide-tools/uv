@@ -6,7 +6,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use rustc_hash::FxHashSet;
+#[cfg(feature = "audit")]
 use uv_audit::service::VulnerabilityServiceFormat;
+#[cfg(feature = "audit")]
 use uv_audit::types::VulnerabilityID;
 
 #[cfg(feature = "python-managed")]
@@ -15,24 +17,31 @@ use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
-    AddArgs, AuditArgs, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs, ColorChoice, ExternalCommand,
-    GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
+    AddArgs, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs, ColorChoice, ExternalCommand,
+    GlobalArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
     PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
     PipUninstallArgs, PythonFindArgs, PythonListArgs, PythonListFormat,
     RemoveArgs, RunArgs, SyncArgs,
-    SyncFormat, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs,
-    TreeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
+    SyncFormat, TreeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
+#[cfg(feature = "audit")]
+use uv_cli::AuditArgs;
+#[cfg(feature = "init")]
+use uv_cli::InitArgs;
 #[cfg(feature = "python-managed")]
 use uv_cli::{PythonDirArgs, PythonInstallArgs, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs};
 use uv_cli::{
-    AuthorFrom, BuildArgs, ExportArgs, FormatArgs, PublishArgs,
-    ResolverInstallerArgs, ToolUpgradeArgs,
+    AuthorFrom, BuildArgs, ExportArgs, FormatArgs,
+    ResolverInstallerArgs,
     options::{
         Flag, FlagSource, check_conflicts, flag, resolve_flag, resolver_installer_options,
         resolver_options,
     },
 };
+#[cfg(feature = "publish")]
+use uv_cli::PublishArgs;
+#[cfg(feature = "tool")]
+use uv_cli::{ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs, ToolUpgradeArgs};
 use uv_client::Connectivity;
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DryRun, EditableMode, EnvFile,
@@ -57,17 +66,22 @@ use uv_resolver::{
     PrereleaseMode, ResolutionMode,
 };
 use uv_settings::{
-    Combine, EnvironmentOptions, FilesystemOptions, Options, PipOptions, PublishOptions,
+    Combine, EnvironmentOptions, FilesystemOptions, Options, PipOptions,
     PythonInstallMirrors, ResolverInstallerOptions, ResolverInstallerSchema, ResolverOptions,
 };
+#[cfg(feature = "publish")]
+use uv_settings::PublishOptions;
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies};
 use uv_workspace::pyproject_mut::AddBoundsKind;
 
+#[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
-use crate::commands::{InitKind, InitProjectKind, pip::operations::Modifications};
+#[cfg(feature = "init")]
+use crate::commands::{InitKind, InitProjectKind};
+use crate::commands::pip::operations::Modifications;
 
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
@@ -388,6 +402,7 @@ impl CacheSettings {
 }
 
 /// The resolved settings to use for a `init` invocation.
+#[cfg(feature = "init")]
 #[derive(Debug, Clone)]
 pub(crate) struct InitSettings {
     pub(crate) path: Option<PathBuf>,
@@ -407,6 +422,7 @@ pub(crate) struct InitSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
 
+#[cfg(feature = "init")]
 impl InitSettings {
     /// Resolve the [`InitSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -722,6 +738,7 @@ impl RunSettings {
 }
 
 /// The resolved settings to use for a `tool run` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolRunSettings {
     pub(crate) command: Option<ExternalCommand>,
@@ -745,6 +762,7 @@ pub(crate) struct ToolRunSettings {
     pub(crate) no_env_file: bool,
 }
 
+#[cfg(feature = "tool")]
 impl ToolRunSettings {
     /// Resolve the [`ToolRunSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -872,6 +890,7 @@ impl ToolRunSettings {
 }
 
 /// The resolved settings to use for a `tool install` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolInstallSettings {
     pub(crate) package: String,
@@ -895,6 +914,7 @@ pub(crate) struct ToolInstallSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
 
+#[cfg(feature = "tool")]
 impl ToolInstallSettings {
     /// Resolve the [`ToolInstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -995,6 +1015,7 @@ impl ToolInstallSettings {
 }
 
 /// The resolved settings to use for a `tool upgrade` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolUpgradeSettings {
     pub(crate) names: Vec<String>,
@@ -1004,6 +1025,7 @@ pub(crate) struct ToolUpgradeSettings {
     pub(crate) args: ResolverInstallerOptions,
     pub(crate) filesystem: ResolverInstallerOptions,
 }
+#[cfg(feature = "tool")]
 impl ToolUpgradeSettings {
     /// Resolve the [`ToolUpgradeSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -1108,6 +1130,7 @@ impl ToolUpgradeSettings {
 }
 
 /// The resolved settings to use for a `tool list` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolListSettings {
     pub(crate) show_paths: bool,
@@ -1120,6 +1143,7 @@ pub(crate) struct ToolListSettings {
     pub(crate) filesystem: ResolverInstallerOptions,
 }
 
+#[cfg(feature = "tool")]
 impl ToolListSettings {
     /// Resolve the [`ToolListSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: ToolListArgs, filesystem: Option<FilesystemOptions>) -> Self {
@@ -1159,11 +1183,13 @@ impl ToolListSettings {
 }
 
 /// The resolved settings to use for a `tool uninstall` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolUninstallSettings {
     pub(crate) name: Vec<PackageName>,
 }
 
+#[cfg(feature = "tool")]
 impl ToolUninstallSettings {
     /// Resolve the [`ToolUninstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: ToolUninstallArgs, _filesystem: Option<FilesystemOptions>) -> Self {
@@ -1176,11 +1202,13 @@ impl ToolUninstallSettings {
 }
 
 /// The resolved settings to use for a `tool dir` invocation.
+#[cfg(feature = "tool")]
 #[derive(Debug, Clone)]
 pub(crate) struct ToolDirSettings {
     pub(crate) bin: bool,
 }
 
+#[cfg(feature = "tool")]
 impl ToolDirSettings {
     /// Resolve the [`ToolDirSettings`] from the CLI and filesystem configuration.
     #[expect(clippy::needless_pass_by_value)]
@@ -2587,6 +2615,7 @@ impl FormatSettings {
 }
 
 /// The resolved settings to use for an `audit` invocation.
+#[cfg(feature = "audit")]
 #[derive(Debug, Clone)]
 pub(crate) struct AuditSettings {
     pub(crate) extras: ExtrasSpecification,
@@ -2603,6 +2632,7 @@ pub(crate) struct AuditSettings {
     pub(crate) ignore_until_fixed: Vec<VulnerabilityID>,
 }
 
+#[cfg(feature = "audit")]
 impl AuditSettings {
     /// Resolve the [`AuditSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -4337,6 +4367,7 @@ impl<'a> From<&'a ResolverInstallerSettings> for InstallerSettingsRef<'a> {
 }
 
 /// The resolved settings to use for an invocation of the `uv publish` CLI.
+#[cfg(feature = "publish")]
 #[derive(Debug, Clone)]
 pub(crate) struct PublishSettings {
     // CLI only, see [`PublishArgs`] for docs.
@@ -4358,6 +4389,7 @@ pub(crate) struct PublishSettings {
     pub(crate) index_locations: IndexLocations,
 }
 
+#[cfg(feature = "publish")]
 impl PublishSettings {
     /// Resolve the [`PublishSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {

@@ -21,8 +21,6 @@ use settings::PipTreeSettings;
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
-#[cfg(not(feature = "self-update"))]
-use crate::install_source::InstallSource;
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 #[cfg(feature = "self-update")]
@@ -30,9 +28,13 @@ use uv_cli::SelfUpdateArgs;
 use uv_cli::{
     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
     CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
-    PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
+    PythonNamespace, TopLevelArgs,
     WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
 };
+#[cfg(feature = "self-commands")]
+use uv_cli::{SelfCommand, SelfNamespace};
+#[cfg(feature = "tool")]
+use uv_cli::{ToolCommand, ToolNamespace};
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
 use uv_flags::EnvironmentFlags;
@@ -51,23 +53,39 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath, ToolRunCommand};
+use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
+#[cfg(feature = "tool")]
+use crate::commands::ToolRunCommand;
 use crate::printer::Printer;
 use crate::settings::{
     CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,
     PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipUninstallSettings,
-    PublishSettings,
 };
+#[cfg(feature = "publish")]
+use crate::settings::PublishSettings;
 
 pub(crate) mod child;
 pub(crate) mod commands;
-#[cfg(not(feature = "self-update"))]
-mod install_source;
 pub(crate) mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;
 #[cfg(windows)]
 mod windows_exception;
+
+/// Returns `true` for commands that operate at the user-level and should ignore local workspace
+/// configuration. Centralizes the `Commands::Tool(_) | Commands::Self_(_)` check so it compiles
+/// correctly regardless of which features are enabled.
+fn is_user_level_command(command: &Commands) -> bool {
+    #[cfg(feature = "tool")]
+    if matches!(command, Commands::Tool(_)) {
+        return true;
+    }
+    #[cfg(feature = "self-commands")]
+    if matches!(command, Commands::Self_(_)) {
+        return true;
+    }
+    false
+}
 
 #[instrument(skip_all)]
 async fn run(cli: Cli) -> Result<ExitStatus> {
@@ -145,10 +163,13 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
     // Validate that the project directory exists if explicitly provided via --project, except for
     // `uv init`, which creates the project directory (separate deprecation).
+    #[cfg(feature = "init")]
     let skip_project_validation = matches!(
         &*cli.command,
         Commands::Project(command) if matches!(**command, ProjectCommand::Init(_))
     );
+    #[cfg(not(feature = "init"))]
+    let skip_project_validation = false;
 
     if !skip_project_validation {
         if let Some(project_path) = cli.top_level.global_args.project.as_ref() {
@@ -188,6 +209,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
     let deprecated_isolated = if cli.top_level.global_args.isolated {
         match &*cli.command {
             // Supports `--isolated` as its own argument, so we can't warn either way.
+            #[cfg(feature = "tool")]
             Commands::Tool(ToolNamespace {
                 command: ToolCommand::Uvx(_) | ToolCommand::Run(_),
             }) => false,
@@ -196,6 +218,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             Commands::Project(command) if matches!(**command, ProjectCommand::Run(_)) => false,
 
             // `--isolated` moved to `--no-workspace`.
+            #[cfg(feature = "init")]
             Commands::Project(command) if matches!(**command, ProjectCommand::Init(_)) => {
                 warn_user!(
                     "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files or `--no-workspace` to prevent uv from adding the initialized project to the containing workspace."
@@ -204,7 +227,15 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             }
 
             // Preview APIs. Ignore `--isolated` and warn.
+            #[cfg(feature = "tool")]
             Commands::Project(_) | Commands::Tool(_) | Commands::Python(_) => {
+                warn_user!(
+                    "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
+                );
+                false
+            }
+            #[cfg(not(feature = "tool"))]
+            Commands::Project(_) | Commands::Python(_) => {
                 warn_user!(
                     "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
                 );
@@ -242,7 +273,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
         Some(FilesystemOptions::from_file(config_file).map_err(map_settings_error)?)
     } else if deprecated_isolated || cli.top_level.no_config {
         None
-    } else if matches!(&*cli.command, Commands::Tool(_) | Commands::Self_(_)) {
+    } else if is_user_level_command(&cli.command) {
         // For commands that operate at the user-level, ignore local configuration.
         FilesystemOptions::user()
             .map_err(map_settings_error)?
@@ -310,8 +341,26 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             | ProjectCommand::Export(uv_cli::ExportArgs {
                 script: Some(script),
                 ..
-            })
-            | ProjectCommand::Audit(uv_cli::AuditArgs {
+            }) => match Pep723Script::read(script).await {
+                Ok(Some(script)) => Some(Pep723Item::Script(script)),
+                Ok(None) => {
+                    bail!(
+                        "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
+                        script.user_display().cyan(),
+                        format!("uv init --script {}", script.user_display()).green()
+                    )
+                }
+                Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+                    bail!(
+                        "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
+                        script.user_display().cyan(),
+                        format!("uv init --script {}", script.user_display()).green()
+                    )
+                }
+                Err(err) => return Err(err.into()),
+            },
+            #[cfg(feature = "audit")]
+            ProjectCommand::Audit(uv_cli::AuditArgs {
                 script: Some(script),
                 ..
             }) => match Pep723Script::read(script).await {
@@ -1332,6 +1381,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "self-commands")]
         Commands::Self_(SelfNamespace {
             command:
                 SelfCommand::Version {
@@ -1342,29 +1392,11 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             commands::self_version(short, output_format, printer)?;
             Ok(ExitStatus::Success)
         }
-        #[cfg(not(feature = "self-update"))]
-        Commands::Self_(_) => {
-            const BASE_MESSAGE: &str =
-                "uv was installed through an external package manager and cannot update itself.";
-
-            let message = match InstallSource::detect() {
-                Some(source) => format!(
-                    "{base}\n\n{hint}{colon} You installed uv using {}. To update uv, run `{}`",
-                    source.description(),
-                    source.update_instructions().green(),
-                    hint = "hint".bold().cyan(),
-                    colon = ":".bold(),
-                    base = BASE_MESSAGE
-                ),
-                None => format!("{BASE_MESSAGE} Please use your package manager to update uv."),
-            };
-
-            anyhow::bail!(message);
-        }
         Commands::GenerateShellCompletion(args) => {
             args.shell.generate(&mut Cli::command(), &mut stdout());
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_)),
         }) => {
@@ -1492,6 +1524,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Install(args),
         }) => {
@@ -1592,6 +1625,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::List(args),
         }) => {
@@ -1618,6 +1652,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Upgrade(args),
         }) => {
@@ -1650,6 +1685,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Uninstall(args),
         }) => {
@@ -1659,12 +1695,14 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
             commands::tool_uninstall(args.name, printer).await
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::UpdateShell,
         }) => {
             commands::tool_update_shell(printer).await?;
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "tool")]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Dir(args),
         }) => {
@@ -1876,6 +1914,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             commands::python_update_shell(printer).await?;
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "publish")]
         Commands::Publish(args) => {
             show_settings!(args);
 
@@ -2088,6 +2127,7 @@ async fn run_project(
     let environment = EnvironmentOptions::new()?;
 
     match *project_command {
+        #[cfg(feature = "init")]
         ProjectCommand::Init(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::InitSettings::resolve(args, filesystem, environment);
@@ -2670,6 +2710,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "audit")]
         ProjectCommand::Audit(audit_args) => {
             let args = settings::AuditSettings::resolve(audit_args, filesystem, environment);
             show_settings!(args);

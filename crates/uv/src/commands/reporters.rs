@@ -12,6 +12,7 @@ use rustc_hash::FxHashMap;
 use crate::commands::human_readable_bytes;
 use crate::printer::Printer;
 use uv_cache::Removal;
+#[cfg(feature = "publish")]
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     BuildableSource, CachedDist, DistributionMetadata, Name, SourceDist, VersionOrUrlRef,
@@ -691,11 +692,13 @@ impl uv_python::downloads::Reporter for PythonDownloadReporter {
     }
 }
 
+#[cfg(feature = "publish")]
 #[derive(Debug)]
 pub(crate) struct PublishReporter {
     reporter: ProgressReporter,
 }
 
+#[cfg(feature = "publish")]
 impl PublishReporter {
     /// Initialize a [`PublishReporter`] for a single upload.
     pub(crate) fn single(printer: Printer) -> Self {
@@ -711,6 +714,7 @@ impl PublishReporter {
     }
 }
 
+#[cfg(feature = "publish")]
 impl uv_publish::Reporter for PublishReporter {
     fn on_progress(&self, _name: &str, id: usize) {
         self.reporter.on_download_complete(id);

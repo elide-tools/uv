@@ -11,6 +11,7 @@ use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use clap::{ValueEnum, ValueHint};
 
+#[cfg(feature = "audit")]
 use uv_audit::service::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;
@@ -426,6 +427,7 @@ pub enum Commands {
     Project(Box<ProjectCommand>),
 
     /// Run and install commands provided by Python packages.
+    #[cfg(feature = "tool")]
     #[command(
         after_help = "Use `uv help tool` for more details.",
         after_long_help = ""
@@ -529,6 +531,7 @@ pub enum Commands {
     )]
     Build(BuildArgs),
     /// Upload distributions to an index.
+    #[cfg(feature = "publish")]
     Publish(PublishArgs),
     /// Inspect uv workspaces.
     #[command(
@@ -553,6 +556,7 @@ pub enum Commands {
     )]
     Cache(CacheNamespace),
     /// Manage the uv executable.
+    #[cfg(feature = "self-commands")]
     #[command(name = "self")]
     Self_(SelfNamespace),
     /// Clear the cache, removing all entries or those linked to specific packages.
@@ -834,15 +838,18 @@ impl TypedValueParser for VersionBumpSpecValueParser {
     }
 }
 
+#[cfg(feature = "self-commands")]
 #[derive(Args)]
 pub struct SelfNamespace {
     #[command(subcommand)]
     pub command: SelfCommand,
 }
 
+#[cfg(feature = "self-commands")]
 #[derive(Subcommand)]
 pub enum SelfCommand {
     /// Update uv.
+    #[cfg(feature = "self-update")]
     Update(SelfUpdateArgs),
     /// Display uv's version
     Version {
@@ -854,6 +861,7 @@ pub enum SelfCommand {
     },
 }
 
+#[cfg(feature = "self-update")]
 #[derive(Args, Debug)]
 pub struct SelfUpdateArgs {
     /// Update to the specified version. If not provided, uv will update to the latest version.
@@ -1073,6 +1081,7 @@ pub enum ProjectCommand {
     ///
     /// Some project state is not created until needed, e.g., the project virtual environment
     /// (`.venv`) and lockfile (`uv.lock`) are lazily created during the first sync.
+    #[cfg(feature = "init")]
     Init(InitArgs),
     /// Add dependencies to the project.
     ///
@@ -1204,6 +1213,7 @@ pub enum ProjectCommand {
     /// By default, all extras and groups within the project are audited. To exclude extras
     /// and/or groups from the audit, use the `--no-extra`, `--no-group`, and related
     /// options.
+    #[cfg(feature = "audit")]
     #[command(
         after_help = "Use `uv help audit` for more details.",
         after_long_help = ""
@@ -3335,6 +3345,7 @@ pub enum AuthorFrom {
     None,
 }
 
+#[cfg(feature = "init")]
 #[derive(Args)]
 pub struct InitArgs {
     /// The path to use for the project/script.
@@ -5160,6 +5171,7 @@ pub struct FormatArgs {
     pub show_version: bool,
 }
 
+#[cfg(feature = "audit")]
 #[derive(Args)]
 pub struct AuditArgs {
     /// Don't audit the specified optional dependencies.
@@ -5323,12 +5335,14 @@ pub enum AuthCommand {
     Helper(AuthHelperArgs),
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolNamespace {
     #[command(subcommand)]
     pub command: ToolCommand,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Subcommand)]
 pub enum ToolCommand {
     /// Run a command provided by a Python package.
@@ -5415,6 +5429,7 @@ pub enum ToolCommand {
     Dir(ToolDirArgs),
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolRunArgs {
     /// The command to run.
@@ -5599,6 +5614,7 @@ pub struct ToolRunArgs {
     pub generate_shell_completion: Option<clap_complete_command::Shell>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct UvxArgs {
     #[command(flatten)]
@@ -5609,6 +5625,7 @@ pub struct UvxArgs {
     pub version: Option<bool>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolInstallArgs {
     /// The package to install commands from.
@@ -5789,6 +5806,7 @@ pub struct ToolInstallArgs {
     pub torch_backend: Option<TorchMode>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolListArgs {
     /// Whether to display the path to each tool environment and installed executable.
@@ -5842,6 +5860,7 @@ pub struct ToolListArgs {
     pub no_python_downloads: bool,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolDirArgs {
     /// Show the directory into which `uv tool` will install executables.
@@ -5860,6 +5879,7 @@ pub struct ToolDirArgs {
     pub bin: bool,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolUninstallArgs {
     /// The name of the tool to uninstall.
@@ -5871,6 +5891,7 @@ pub struct ToolUninstallArgs {
     pub all: bool,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolUpgradeArgs {
     /// The name of the tool to upgrade, along with an optional version specifier.
@@ -7847,6 +7868,7 @@ pub struct DisplayTreeArgs {
     pub show_sizes: bool,
 }
 
+#[cfg(feature = "publish")]
 #[derive(Args, Debug)]
 pub struct PublishArgs {
     /// Paths to the files to upload. Accepts glob expressions.

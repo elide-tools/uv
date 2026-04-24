@@ -15,7 +15,7 @@ default-run = "uv"
 workspace = true
 
 [dependencies]
-uv-audit = { workspace = true }
+uv-audit = { workspace = true, optional = true }
 uv-auth = { workspace = true }
 uv-bin-install = { workspace = true }
 uv-build-backend = { workspace = true }
@@ -46,7 +46,7 @@ uv-performance-memory-allocator = { workspace = true, optional = true }
 uv-platform = { workspace = true }
 uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
-uv-publish = { workspace = true }
+uv-publish = { workspace = true, optional = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true, features = ["schemars"] }
 uv-redacted = { workspace = true }
@@ -58,7 +58,7 @@ uv-settings = { workspace = true, features = ["schemars"] }
 uv-shell = { workspace = true }
 uv-static = { workspace = true }
 uv-test = { workspace = true, optional = true }
-uv-tool = { workspace = true }
+uv-tool = { workspace = true, optional = true }
 uv-torch = { workspace = true }
 uv-trampoline-builder = { workspace = true }
 uv-types = { workspace = true }
@@ -161,13 +161,30 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber", "python-managed"]
+default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands"]
 native-auth = []
 
 # Enable Python installation management (uv python install/uninstall/pin/dir/update-shell).
 # Disable to strip download-from-python-build-standalone functionality while keeping
 # Python discovery (uv python find/list, uv sync against existing venvs) intact.
 python-managed = ["uv-cli/python-managed", "uv-python/python-managed"]
+
+# Enable `uv publish` subcommand and its uv-publish sub-crate.
+publish = ["dep:uv-publish", "uv-cli/publish"]
+
+# Enable `uv tool` namespace (install/run/uninstall/list/upgrade/dir) and its uv-tool sub-crate.
+tool = ["dep:uv-tool", "uv-cli/tool"]
+
+# Enable `uv audit` subcommand and its uv-audit sub-crate.
+audit = ["dep:uv-audit", "uv-cli/audit"]
+
+# Enable `uv init` subcommand (no dedicated sub-crate drop).
+init = ["uv-cli/init"]
+
+# Enable the `uv self` namespace (version + update).
+# Enabling `self-update` also enables `self-commands`, but `self-commands` alone keeps
+# `uv self version` without the update functionality.
+self-commands = ["uv-cli/self-commands"]
 
 # Install a global `tracing_subscriber` during `logging::setup_logging`.
 # When disabled, `setup_logging` returns early without calling `.init()` —
@@ -182,7 +199,7 @@ performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
 
 # Adds self-update functionality. This feature is only enabled for uv's cargo-dist installer
 # and should be left unselected when building uv for package managers.
-self-update = ["axoupdater", "uv-cli/self-update"]
+self-update = ["self-commands", "axoupdater", "uv-cli/self-update"]
 
 # Features for development only.
 tracing-durations-export = ["dep:tracing-durations-export", "uv-resolver/tracing-durations-export", "uv-settings/tracing-durations-export", "uv-test/tracing-durations-export"]

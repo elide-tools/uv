@@ -63,6 +63,7 @@ use crate::settings::{
 };
 
 pub(crate) mod add;
+#[cfg(feature = "audit")]
 pub(crate) mod audit;
 pub(crate) mod environment;
 pub(crate) mod export;
@@ -305,6 +306,7 @@ pub(crate) enum ProjectError {
     #[error(transparent)]
     Interpreter(#[from] uv_python::InterpreterError),
 
+    #[cfg(feature = "tool")]
     #[error(transparent)]
     Tool(#[from] uv_tool::Error),
 
