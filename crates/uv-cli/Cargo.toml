@@ -16,7 +16,7 @@ doctest = false
 workspace = true
 
 [dependencies]
-uv-audit = { workspace = true, features = ["clap"] }
+uv-audit = { workspace = true, features = ["clap"], optional = true }
 uv-auth = { workspace = true }
 uv-cache = { workspace = true, features = ["clap"] }
 uv-configuration = { workspace = true, features = ["clap"] }
@@ -48,9 +48,19 @@ insta = { workspace = true }
 
 [features]
 default = []
-self-update = []
+self-update = ["self-commands"]
 # Enable Python install/uninstall/pin/dir/update-shell CLI subcommands.
 python-managed = []
+# Enable `uv publish` subcommand.
+publish = []
+# Enable `uv tool` namespace.
+tool = []
+# Enable `uv audit` subcommand in the project namespace.
+audit = ["dep:uv-audit"]
+# Enable `uv init` subcommand in the project namespace.
+init = []
+# Enable `uv self` namespace (version + update).
+self-commands = []
 
 [build-dependencies]
 uv-static = { workspace = true }

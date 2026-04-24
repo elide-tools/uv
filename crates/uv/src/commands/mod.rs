@@ -30,9 +30,11 @@ pub(crate) use pip::sync::pip_sync;
 pub(crate) use pip::tree::pip_tree;
 pub(crate) use pip::uninstall::pip_uninstall;
 pub(crate) use project::add::add;
+#[cfg(feature = "audit")]
 pub(crate) use project::audit::audit;
 pub(crate) use project::export::export;
 pub(crate) use project::format::format;
+#[cfg(feature = "init")]
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
 pub(crate) use project::lock::lock;
 pub(crate) use project::remove::remove;
@@ -40,6 +42,7 @@ pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
 pub(crate) use project::sync::sync;
 pub(crate) use project::tree::tree;
 pub(crate) use project::version::{project_version, self_version};
+#[cfg(feature = "publish")]
 pub(crate) use publish::publish;
 pub(crate) use python::find::find as python_find;
 pub(crate) use python::find::find_script as python_find_script;
@@ -58,13 +61,21 @@ pub(crate) use python::uninstall::uninstall as python_uninstall;
 pub(crate) use python::update_shell::update_shell as python_update_shell;
 #[cfg(feature = "self-update")]
 pub(crate) use self_update::self_update;
+#[cfg(feature = "tool")]
 pub(crate) use tool::dir::dir as tool_dir;
+#[cfg(feature = "tool")]
 pub(crate) use tool::install::install as tool_install;
+#[cfg(feature = "tool")]
 pub(crate) use tool::list::list as tool_list;
+#[cfg(feature = "tool")]
 pub(crate) use tool::run::ToolRunCommand;
+#[cfg(feature = "tool")]
 pub(crate) use tool::run::run as tool_run;
+#[cfg(feature = "tool")]
 pub(crate) use tool::uninstall::uninstall as tool_uninstall;
+#[cfg(feature = "tool")]
 pub(crate) use tool::update_shell::update_shell as tool_update_shell;
+#[cfg(feature = "tool")]
 pub(crate) use tool::upgrade::upgrade as tool_upgrade;
 use uv_cache::Cache;
 use uv_configuration::Concurrency;
@@ -93,12 +104,14 @@ mod editable;
 mod help;
 pub(crate) mod pip;
 mod project;
+#[cfg(feature = "publish")]
 mod publish;
 mod pylock;
 mod python;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_update;
+#[cfg(feature = "tool")]
 mod tool;
 mod venv;
 mod workspace;

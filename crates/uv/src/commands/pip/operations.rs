@@ -43,6 +43,7 @@ use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
     Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
 };
+#[cfg(feature = "tool")]
 use uv_tool::InstalledTools;
 use uv_types::{BuildContext, HashStrategy, InFlight, InstalledPackagesProvider};
 use uv_warnings::warn_user;
@@ -962,6 +963,7 @@ pub(crate) fn report_target_environment(
     }
 
     // Do not report tool environments
+    #[cfg(feature = "tool")]
     if let Ok(tools) = InstalledTools::from_settings() {
         if target.starts_with(tools.root()) {
             debug!("{}", message);
