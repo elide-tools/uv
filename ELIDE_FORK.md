@@ -10,6 +10,11 @@
 
 In reverse chronological order:
 
+- (2026-04-23) — `chore(uv-keyring): drop native-auth default features`
+  - `crates/uv-keyring/Cargo.toml`: changed `default = ["apple-native", "secret-service", "windows-native"]` to `default = []`. The native-auth integrations (macOS Keychain, Linux secret-service, Windows Credential Store) are now opt-in rather than on-by-default. Embedded consumers that don't use `uv publish` credential storage via the OS keyring get a smaller default build.
+  - Note: does NOT drop `security-framework` from the graph — that crate is pulled independently via `rustls-native-certs` for system-cert loading, unrelated to the keyring.
+  - Attempted parallel cut: removing `"schemars"` activations from uv-cli/uv-configuration/uv-distribution-types/uv-settings. REVERTED because `uv-settings` and `uv-distribution-types` have unconditional `schemars::JsonSchema` derives in source that can't be cleanly feature-gated without ~60+ source edits per crate. Deferred as a bigger fork patch.
+
 - (2026-04-23) — `feat: gate global tracing-subscriber install`
   - `crates/uv/Cargo.toml`: added feature `install-tracing-subscriber` to `[features]`, default-on. Threaded into `default = [...]` alongside existing defaults.
   - `crates/uv/src/logging.rs`: `setup_logging` now has two impls — the real one gated by `#[cfg(feature = "install-tracing-subscriber")]`, and a stub that returns `Ok(())` when the feature is off. The stub lets tracing events continue to emit through the macros without installing a global subscriber, so the embedder can own the subscriber and receive uv events alongside other emitters (orogene, Elide, …).

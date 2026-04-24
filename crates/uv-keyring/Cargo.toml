@@ -13,7 +13,7 @@ license = { workspace = true }
 workspace = true
 
 [features]
-default = ["apple-native", "secret-service", "windows-native"]
+default = []
 native-auth = []
 
 ## Use the built-in Keychain Services on macOS
