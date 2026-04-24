@@ -108,6 +108,7 @@ pub enum Error {
 }
 
 impl Error {
+    #[cfg_attr(not(feature = "python-managed"), allow(dead_code))]
     pub(crate) fn with_missing_python_hint(self, hint: String) -> Self {
         match self {
             Self::MissingPython(err, _) => Self::MissingPython(err, Some(hint)),

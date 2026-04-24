@@ -1705,6 +1705,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Install(args),
         }) => {
@@ -1739,6 +1740,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Upgrade(args),
         }) => {
@@ -1774,6 +1776,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Uninstall(args),
         }) => {
@@ -1827,6 +1830,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 .await
             }
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Pin(args),
         }) => {
@@ -1854,6 +1858,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Dir(args),
         }) => {
@@ -1864,6 +1869,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             commands::python_dir(args.bin, printer)?;
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "python-managed")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::UpdateShell,
         }) => {

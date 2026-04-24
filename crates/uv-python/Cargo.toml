@@ -81,6 +81,12 @@ temp-env = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 
+[features]
+# Enable Python installation management (download/install from python-build-standalone).
+# When disabled, downloads.rs and managed.rs still compile (needed for discovery of
+# already-installed managed Pythons) but PythonInstallation::fetch is gated out.
+python-managed = []
+
 [build-dependencies]
 uv-static = { workspace = true }
 

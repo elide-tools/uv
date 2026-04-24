@@ -49,6 +49,8 @@ insta = { workspace = true }
 [features]
 default = []
 self-update = []
+# Enable Python install/uninstall/pin/dir/update-shell CLI subcommands.
+python-managed = []
 
 [build-dependencies]
 uv-static = { workspace = true }
