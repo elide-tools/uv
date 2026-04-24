@@ -32,6 +32,7 @@ use uv_resolver::{
     AnnotationStyle, ExcludeNewerPackageEntry, ExcludeNewerValue, ForkStrategy, PrereleaseMode,
     ResolutionMode,
 };
+#[cfg(feature = "python-managed")]
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
@@ -6218,6 +6219,7 @@ pub enum PythonCommand {
     /// Multiple Python versions may be requested.
     ///
     /// See `uv help python` to view supported request formats.
+    #[cfg(feature = "python-managed")]
     Install(PythonInstallArgs),
 
     /// Upgrade installed Python versions.
@@ -6238,6 +6240,7 @@ pub enum PythonCommand {
     /// upgrades, the environment must be recreated.
     ///
     /// Upgrades are not yet supported for alternative implementations, like PyPy.
+    #[cfg(feature = "python-managed")]
     Upgrade(PythonUpgradeArgs),
 
     /// Search for a Python installation.
@@ -6257,6 +6260,7 @@ pub enum PythonCommand {
     /// error.
     ///
     /// See `uv help python` to view supported request formats.
+    #[cfg(feature = "python-managed")]
     Pin(PythonPinArgs),
 
     /// Show the uv Python installation directory.
@@ -6270,9 +6274,11 @@ pub enum PythonCommand {
     /// To view the directory where uv installs Python executables instead, use the `--bin` flag.
     /// The Python executable directory may be overridden with `$UV_PYTHON_BIN_DIR`. Note that
     /// Python executables are only installed when preview mode is enabled.
+    #[cfg(feature = "python-managed")]
     Dir(PythonDirArgs),
 
     /// Uninstall Python versions.
+    #[cfg(feature = "python-managed")]
     Uninstall(PythonUninstallArgs),
 
     /// Ensure that the Python executable directory is on the `PATH`.
@@ -6285,6 +6291,7 @@ pub enum PythonCommand {
     ///
     /// The Python executable directory is determined according to the XDG standard and can be
     /// retrieved with `uv python dir --bin`.
+    #[cfg(feature = "python-managed")]
     #[command(alias = "ensurepath")]
     UpdateShell,
 }
@@ -6341,6 +6348,7 @@ pub struct PythonListArgs {
     pub python_downloads_json_url: Option<String>,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonDirArgs {
     /// Show the directory into which `uv python` will install Python executables.
@@ -6358,6 +6366,7 @@ pub struct PythonDirArgs {
     pub bin: bool,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonInstallCompileBytecodeArgs {
     /// Compile Python's standard library to bytecode after installation.
@@ -6388,6 +6397,7 @@ pub struct PythonInstallCompileBytecodeArgs {
     pub no_compile_bytecode: bool,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonInstallArgs {
     /// The directory to store the Python installation in.
@@ -6512,6 +6522,7 @@ pub struct PythonInstallArgs {
     pub compile_bytecode: PythonInstallCompileBytecodeArgs,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonInstallArgs {
     #[must_use]
     pub fn install_mirrors(&self) -> PythonInstallMirrors {
@@ -6523,6 +6534,7 @@ impl PythonInstallArgs {
     }
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonUpgradeArgs {
     /// The directory Python installations are stored in.
@@ -6575,6 +6587,7 @@ pub struct PythonUpgradeArgs {
     pub compile_bytecode: PythonInstallCompileBytecodeArgs,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonUpgradeArgs {
     #[must_use]
     pub fn install_mirrors(&self) -> PythonInstallMirrors {
@@ -6586,6 +6599,7 @@ impl PythonUpgradeArgs {
     }
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonUninstallArgs {
     /// The directory where the Python was installed.
@@ -6667,6 +6681,7 @@ pub struct PythonFindArgs {
     pub python_downloads_json_url: Option<String>,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonPinArgs {
     /// The Python version request.

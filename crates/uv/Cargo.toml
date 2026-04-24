@@ -161,8 +161,13 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber"]
+default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber", "python-managed"]
 native-auth = []
+
+# Enable Python installation management (uv python install/uninstall/pin/dir/update-shell).
+# Disable to strip download-from-python-build-standalone functionality while keeping
+# Python discovery (uv python find/list, uv sync against existing venvs) intact.
+python-managed = ["uv-cli/python-managed", "uv-python/python-managed"]
 
 # Install a global `tracing_subscriber` during `logging::setup_logging`.
 # When disabled, `setup_logging` returns early without calling `.init()` —

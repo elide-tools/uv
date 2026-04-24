@@ -9,6 +9,7 @@ use rustc_hash::FxHashSet;
 use uv_audit::service::VulnerabilityServiceFormat;
 use uv_audit::types::VulnerabilityID;
 
+#[cfg(feature = "python-managed")]
 use crate::commands::{PythonUpgrade, PythonUpgradeSource};
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
@@ -17,13 +18,15 @@ use uv_cli::{
     AddArgs, AuditArgs, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs, ColorChoice, ExternalCommand,
     GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
     PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
-    PipUninstallArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs, PythonListFormat,
-    PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs, SyncArgs,
+    PipUninstallArgs, PythonFindArgs, PythonListArgs, PythonListFormat,
+    RemoveArgs, RunArgs, SyncArgs,
     SyncFormat, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs,
     TreeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
+#[cfg(feature = "python-managed")]
+use uv_cli::{PythonDirArgs, PythonInstallArgs, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs};
 use uv_cli::{
-    AuthorFrom, BuildArgs, ExportArgs, FormatArgs, PublishArgs, PythonDirArgs,
+    AuthorFrom, BuildArgs, ExportArgs, FormatArgs, PublishArgs,
     ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, check_conflicts, flag, resolve_flag, resolver_installer_options,
@@ -1290,11 +1293,13 @@ impl PythonListSettings {
 }
 
 /// The resolved settings to use for a `python dir` invocation.
+#[cfg(feature = "python-managed")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonDirSettings {
     pub(crate) bin: bool,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonDirSettings {
     /// Resolve the [`PythonDirSettings`] from the CLI and filesystem configuration.
     #[expect(clippy::needless_pass_by_value)]
@@ -1306,6 +1311,7 @@ impl PythonDirSettings {
 }
 
 /// The resolved settings to use for a `python install` invocation.
+#[cfg(feature = "python-managed")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonInstallSettings {
     pub(crate) install_dir: Option<PathBuf>,
@@ -1322,6 +1328,7 @@ pub(crate) struct PythonInstallSettings {
     pub(crate) compile_bytecode: bool,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonInstallSettings {
     /// Resolve the [`PythonInstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -1397,6 +1404,7 @@ impl PythonInstallSettings {
 }
 
 /// The resolved settings to use for a `python upgrade` invocation.
+#[cfg(feature = "python-managed")]
 #[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonUpgradeSettings {
@@ -1413,6 +1421,7 @@ pub(crate) struct PythonUpgradeSettings {
     pub(crate) compile_bytecode: bool,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonUpgradeSettings {
     /// Resolve the [`PythonUpgradeSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -1478,6 +1487,7 @@ impl PythonUpgradeSettings {
 }
 
 /// The resolved settings to use for a `python uninstall` invocation.
+#[cfg(feature = "python-managed")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonUninstallSettings {
     pub(crate) install_dir: Option<PathBuf>,
@@ -1485,6 +1495,7 @@ pub(crate) struct PythonUninstallSettings {
     pub(crate) all: bool,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonUninstallSettings {
     /// Resolve the [`PythonUninstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -1563,6 +1574,7 @@ impl PythonFindSettings {
 }
 
 /// The resolved settings to use for a `python pin` invocation.
+#[cfg(feature = "python-managed")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonPinSettings {
     pub(crate) request: Option<String>,
@@ -1573,6 +1585,7 @@ pub(crate) struct PythonPinSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonPinSettings {
     /// Resolve the [`PythonPinSettings`] from the CLI and workspace configuration.
     pub(crate) fn resolve(

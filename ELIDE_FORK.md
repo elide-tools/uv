@@ -10,6 +10,19 @@
 
 In reverse chronological order:
 
+- (2026-04-23) — `feat(python-managed): feature gate Python download/install management`
+  - `crates/uv/Cargo.toml`: added `python-managed` to `[features]`, default-on. Propagates to `uv-cli` and `uv-python` sub-features.
+  - `crates/uv-cli/Cargo.toml`: added `python-managed = []` feature.
+  - `crates/uv-python/Cargo.toml`: added `[features]` section with `python-managed = []`.
+  - `crates/uv-cli/src/lib.rs`: gated `PythonCommand::{Install, Upgrade, Pin, Dir, Uninstall, UpdateShell}` variants and their arg structs (`PythonInstallArgs`, `PythonUpgradeArgs`, `PythonPinArgs`, `PythonDirArgs`, `PythonUninstallArgs`, `PythonInstallCompileBytecodeArgs`) with `#[cfg(feature = "python-managed")]`.
+  - `crates/uv/src/lib.rs`: gated the dispatch arms for Install, Upgrade, Uninstall, Pin, Dir, UpdateShell.
+  - `crates/uv/src/settings.rs`: gated `PythonInstallSettings`, `PythonUpgradeSettings`, `PythonUninstallSettings`, `PythonPinSettings`, `PythonDirSettings` and their `impl` blocks.
+  - `crates/uv/src/commands/python/mod.rs`: gated `install`, `uninstall`, `pin`, `dir`, `update_shell` module declarations and `ChangeEvent`/`ChangeEventKind` types.
+  - `crates/uv/src/commands/mod.rs`: gated re-exports for `python_install`, `python_uninstall`, `python_pin`, `python_dir`, `python_update_shell`, `PythonUpgrade`, `PythonUpgradeSource`.
+  - `crates/uv-python/src/installation.rs`: gated `PythonInstallation::fetch`, `find_best`, and the full `find_or_download` implementation with `#[cfg(feature = "python-managed")]`. Provided discovery-only stubs for `find_best` and `find_or_download` under `#[cfg(not(feature = "python-managed"))]`. Gated `highest_installations_by_minor_version_key` (install/uninstall only). Also gated unused-when-off imports.
+  - `crates/uv-python/src/discovery.rs`: gated the download block inside `find_best_python_installation` with `#[cfg(feature = "python-managed")]`. Added `#[cfg_attr(not(feature = "python-managed"), allow(...))]` on the function and `dead_code`/`unused_variables` annotations on items only live in the managed path.
+  - Kept intact: `uv python find`, `uv python list`, all `uv sync`/`uv pip install`/`uv add`/`uv lock` flows, `Interpreter` discovery, `ManagedPythonInstallations` for discovery of already-installed managed Pythons, `downloads.rs` and `managed.rs` modules (needed for discovery).
+
 - (2026-04-23) — `chore(uv-keyring): drop native-auth default features`
   - `crates/uv-keyring/Cargo.toml`: changed `default = ["apple-native", "secret-service", "windows-native"]` to `default = []`. The native-auth integrations (macOS Keychain, Linux secret-service, Windows Credential Store) are now opt-in rather than on-by-default. Embedded consumers that don't use `uv publish` credential storage via the OS keyring get a smaller default build.
   - Note: does NOT drop `security-framework` from the graph — that crate is pulled independently via `rustls-native-certs` for system-cert loading, unrelated to the keyring.
