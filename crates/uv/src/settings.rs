@@ -13,17 +13,26 @@ use uv_audit::types::VulnerabilityID;
 
 #[cfg(feature = "python-managed")]
 use crate::commands::{PythonUpgrade, PythonUpgradeSource};
+#[cfg(feature = "auth")]
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
-    AddArgs, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs,
-    ColorChoice, ExternalCommand, GlobalArgs, ListFormat, LockArgs, Maybe, MetadataArgs,
-    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
-    PipSyncArgs, PipTreeArgs, PipUninstallArgs, PythonFindArgs, PythonListArgs,
-    PythonListFormat, RemoveArgs, RunArgs,
-    SyncArgs, SyncFormat, TreeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
+    AddArgs, ColorChoice, ExternalCommand, GlobalArgs, ListFormat, LockArgs, Maybe, MetadataArgs,
+    PythonListFormat, RemoveArgs, RunArgs, SyncArgs, SyncFormat, TreeArgs, VersionArgs,
+    VersionBumpSpec, VersionFormat,
 };
+#[cfg(feature = "auth")]
+use uv_cli::{AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs};
+#[cfg(feature = "pip")]
+use uv_cli::{
+    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
+    PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+};
+#[cfg(feature = "python")]
+use uv_cli::{PythonFindArgs, PythonListArgs};
+#[cfg(feature = "venv")]
+use uv_cli::VenvArgs;
 #[cfg(feature = "audit")]
 use uv_cli::{AuditArgs, AuditOutputFormat};
 #[cfg(feature = "init")]
@@ -31,13 +40,15 @@ use uv_cli::InitArgs;
 #[cfg(feature = "python-managed")]
 use uv_cli::{PythonDirArgs, PythonInstallArgs, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs};
 use uv_cli::{
-    AuthorFrom, BuildArgs, ExportArgs, FormatArgs,
+    AuthorFrom, ExportArgs, FormatArgs,
     ResolverInstallerArgs,
     options::{
         Flag, FlagSource, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options,
     },
 };
+#[cfg(feature = "build")]
+use uv_cli::BuildArgs;
 #[cfg(feature = "publish")]
 use uv_cli::PublishArgs;
 #[cfg(feature = "tool")]
@@ -1260,6 +1271,7 @@ impl ToolDirSettings {
     }
 }
 
+#[cfg(feature = "python")]
 #[derive(Debug, Clone, Default)]
 pub(crate) enum PythonListKinds {
     #[default]
@@ -1271,6 +1283,7 @@ pub(crate) enum PythonListKinds {
 }
 
 /// The resolved settings to use for a `tool run` invocation.
+#[cfg(feature = "python")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonListSettings {
     pub(crate) request: Option<String>,
@@ -1285,6 +1298,7 @@ pub(crate) struct PythonListSettings {
     pub(crate) pypy_install_mirror: Option<String>,
 }
 
+#[cfg(feature = "python")]
 impl PythonListSettings {
     /// Resolve the [`PythonListSettings`] from the CLI and filesystem configuration.
     #[expect(clippy::needless_pass_by_value)]
@@ -1586,6 +1600,7 @@ impl PythonUninstallSettings {
 }
 
 /// The resolved settings to use for a `python find` invocation.
+#[cfg(feature = "python")]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonFindSettings {
     pub(crate) request: Option<String>,
@@ -1596,6 +1611,7 @@ pub(crate) struct PythonFindSettings {
     pub(crate) python_downloads_json_url: Option<String>,
 }
 
+#[cfg(feature = "python")]
 impl PythonFindSettings {
     /// Resolve the [`PythonFindSettings`] from the CLI and workspace configuration.
     pub(crate) fn resolve(
@@ -1928,6 +1944,7 @@ impl LockSettings {
     }
 }
 /// The resolved settings to use for a `lock` invocation.
+#[cfg(feature = "workspace")]
 #[derive(Debug, Clone)]
 pub(crate) struct MetadataSettings {
     pub(crate) lock_check: LockCheck,
@@ -1939,6 +1956,7 @@ pub(crate) struct MetadataSettings {
     pub(crate) settings: ResolverSettings,
 }
 
+#[cfg(feature = "workspace")]
 impl MetadataSettings {
     /// Resolve the [`LockSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -2810,6 +2828,7 @@ impl AuditSettings {
 }
 
 /// The resolved settings to use for a `pip compile` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipCompileSettings {
     pub(crate) format: Option<PipCompileFormat>,
@@ -2828,6 +2847,7 @@ pub(crate) struct PipCompileSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipCompileSettings {
     /// Resolve the [`PipCompileSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3032,6 +3052,7 @@ impl PipCompileSettings {
 }
 
 /// The resolved settings to use for a `pip sync` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipSyncSettings {
     pub(crate) src_file: Vec<PathBuf>,
@@ -3042,6 +3063,7 @@ pub(crate) struct PipSyncSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipSyncSettings {
     /// Resolve the [`PipSyncSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3135,6 +3157,7 @@ impl PipSyncSettings {
 }
 
 /// The resolved settings to use for a `pip install` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipInstallSettings {
     pub(crate) package: Vec<String>,
@@ -3155,6 +3178,7 @@ pub(crate) struct PipInstallSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipInstallSettings {
     /// Resolve the [`PipInstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3326,6 +3350,7 @@ impl PipInstallSettings {
 }
 
 /// The resolved settings to use for a `pip uninstall` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipUninstallSettings {
     pub(crate) package: Vec<String>,
@@ -3334,6 +3359,7 @@ pub(crate) struct PipUninstallSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipUninstallSettings {
     /// Resolve the [`PipUninstallSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3382,6 +3408,7 @@ impl PipUninstallSettings {
 }
 
 /// The resolved settings to use for a `pip freeze` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipFreezeSettings {
     pub(crate) exclude_editable: bool,
@@ -3390,6 +3417,7 @@ pub(crate) struct PipFreezeSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipFreezeSettings {
     /// Resolve the [`PipFreezeSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3432,6 +3460,7 @@ impl PipFreezeSettings {
 }
 
 /// The resolved settings to use for a `pip list` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipListSettings {
     pub(crate) editable: Option<bool>,
@@ -3441,6 +3470,7 @@ pub(crate) struct PipListSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipListSettings {
     /// Resolve the [`PipListSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3488,6 +3518,7 @@ impl PipListSettings {
 }
 
 /// The resolved settings to use for a `pip show` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipShowSettings {
     pub(crate) package: Vec<PackageName>,
@@ -3495,6 +3526,7 @@ pub(crate) struct PipShowSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipShowSettings {
     /// Resolve the [`PipShowSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3535,6 +3567,7 @@ impl PipShowSettings {
 }
 
 /// The resolved settings to use for a `pip tree` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipTreeSettings {
     pub(crate) show_version_specifiers: bool,
@@ -3547,6 +3580,7 @@ pub(crate) struct PipTreeSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipTreeSettings {
     /// Resolve the [`PipTreeSettings`] from the CLI and workspace configuration.
     pub(crate) fn resolve(
@@ -3589,11 +3623,13 @@ impl PipTreeSettings {
 }
 
 /// The resolved settings to use for a `pip check` invocation.
+#[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipCheckSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "pip")]
 impl PipCheckSettings {
     /// Resolve the [`PipCheckSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3626,6 +3662,7 @@ impl PipCheckSettings {
 }
 
 /// The resolved settings to use for a `build` invocation.
+#[cfg(feature = "build")]
 #[derive(Debug, Clone)]
 pub(crate) struct BuildSettings {
     pub(crate) src: Option<PathBuf>,
@@ -3648,6 +3685,7 @@ pub(crate) struct BuildSettings {
     pub(crate) settings: ResolverSettings,
 }
 
+#[cfg(feature = "build")]
 impl BuildSettings {
     /// Resolve the [`BuildSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -3730,6 +3768,7 @@ impl BuildSettings {
 }
 
 /// The resolved settings to use for a `venv` invocation.
+#[cfg(feature = "venv")]
 #[derive(Debug, Clone)]
 pub(crate) struct VenvSettings {
     pub(crate) seed: bool,
@@ -3746,6 +3785,7 @@ pub(crate) struct VenvSettings {
     pub(crate) settings: PipSettings,
 }
 
+#[cfg(feature = "venv")]
 impl VenvSettings {
     /// Resolve the [`VenvSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -4569,12 +4609,14 @@ impl PublishSettings {
 }
 
 /// The resolved settings to use for an invocation of the `uv auth logout` CLI.
+#[cfg(feature = "auth")]
 #[derive(Debug, Clone)]
 pub(crate) struct AuthLogoutSettings {
     pub(crate) service: Service,
     pub(crate) username: Option<String>,
 }
 
+#[cfg(feature = "auth")]
 impl AuthLogoutSettings {
     /// Resolve the [`AuthLogoutSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: AuthLogoutArgs) -> Self {
@@ -4586,12 +4628,14 @@ impl AuthLogoutSettings {
 }
 
 /// The resolved settings to use for an invocation of the `uv auth token` CLI.
+#[cfg(feature = "auth")]
 #[derive(Debug, Clone)]
 pub(crate) struct AuthTokenSettings {
     pub(crate) service: Service,
     pub(crate) username: Option<String>,
 }
 
+#[cfg(feature = "auth")]
 impl AuthTokenSettings {
     /// Resolve the [`AuthTokenSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: AuthTokenArgs) -> Self {
@@ -4603,6 +4647,7 @@ impl AuthTokenSettings {
 }
 
 /// The resolved settings to use for an invocation of the `uv auth set` CLI.
+#[cfg(feature = "auth")]
 #[derive(Debug, Clone)]
 pub(crate) struct AuthLoginSettings {
     pub(crate) service: Service,
@@ -4611,6 +4656,7 @@ pub(crate) struct AuthLoginSettings {
     pub(crate) token: Option<String>,
 }
 
+#[cfg(feature = "auth")]
 impl AuthLoginSettings {
     /// Resolve the [`AuthLoginSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(args: AuthLoginArgs) -> Self {

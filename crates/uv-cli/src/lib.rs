@@ -425,6 +425,7 @@ impl From<ColorChoice> for anstream::ColorChoice {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Manage authentication.
+    #[cfg(feature = "auth")]
     #[command(
         after_help = "Use `uv help auth` for more details.",
         after_long_help = ""
@@ -484,6 +485,7 @@ pub enum Commands {
     /// uv supports discovering CPython, PyPy, and GraalPy interpreters. Unsupported interpreters
     /// will be skipped during discovery. If an unsupported interpreter implementation is requested,
     /// uv will exit with an error.
+    #[cfg(feature = "python")]
     #[clap(verbatim_doc_comment)]
     #[command(
         after_help = "Use `uv help python` for more details.",
@@ -491,6 +493,7 @@ pub enum Commands {
     )]
     Python(PythonNamespace),
     /// Manage Python packages with a pip-compatible interface.
+    #[cfg(feature = "pip")]
     #[command(
         after_help = "Use `uv help pip` for more details.",
         after_long_help = ""
@@ -511,6 +514,7 @@ pub enum Commands {
     /// When using uv, the virtual environment does not need to be activated. uv
     /// will find a virtual environment (named `.venv`) in the working directory
     /// or any parent directories.
+    #[cfg(feature = "venv")]
     #[command(
         alias = "virtualenv",
         alias = "v",
@@ -534,6 +538,7 @@ pub enum Commands {
     ///
     /// If passed a source distribution, `uv build --wheel` will build a wheel
     /// from the source distribution.
+    #[cfg(feature = "build")]
     #[command(
         after_help = "Use `uv help build` for more details.",
         after_long_help = ""
@@ -543,6 +548,7 @@ pub enum Commands {
     #[cfg(feature = "publish")]
     Publish(PublishArgs),
     /// Inspect uv workspaces.
+    #[cfg(feature = "workspace")]
     #[command(
         after_help = "Use `uv help workspace` for more details.",
         after_long_help = "",
@@ -559,6 +565,7 @@ pub enum Commands {
         command: BuildBackendCommand,
     },
     /// Manage uv's cache.
+    #[cfg(feature = "cache")]
     #[command(
         after_help = "Use `uv help cache` for more details.",
         after_long_help = ""
@@ -569,6 +576,7 @@ pub enum Commands {
     #[command(name = "self")]
     Self_(SelfNamespace),
     /// Clear the cache, removing all entries or those linked to specific packages.
+    #[cfg(feature = "cache")]
     #[command(hide = true)]
     Clean(CleanArgs),
     /// Generate shell completion
@@ -887,12 +895,14 @@ pub struct SelfUpdateArgs {
     pub dry_run: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args)]
 pub struct CacheNamespace {
     #[command(subcommand)]
     pub command: CacheCommand,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Subcommand)]
 pub enum CacheCommand {
     /// Clear the cache, removing all entries or those linked to specific packages.
@@ -922,6 +932,7 @@ pub enum CacheCommand {
     Size(SizeArgs),
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct CleanArgs {
     /// The packages to remove from the cache.
@@ -936,6 +947,7 @@ pub struct CleanArgs {
     pub force: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct PruneArgs {
     /// Optimize the cache for persistence in a continuous integration environment, like GitHub
@@ -962,6 +974,7 @@ pub struct PruneArgs {
     pub force: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct SizeArgs {
     /// Display the cache size in human-readable format (e.g., `1.2 GiB` instead of raw bytes).
@@ -969,12 +982,14 @@ pub struct SizeArgs {
     pub human: bool,
 }
 
+#[cfg(feature = "pip")]
 #[derive(Args)]
 pub struct PipNamespace {
     #[command(subcommand)]
     pub command: PipCommand,
 }
 
+#[cfg(feature = "pip")]
 #[derive(Subcommand)]
 pub enum PipCommand {
     /// Compile a `requirements.in` file to a `requirements.txt` or `pylock.toml` file.

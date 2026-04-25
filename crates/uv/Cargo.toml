@@ -157,13 +157,14 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands"]
+default = ["performance", "uv-distribution/static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace"]
 native-auth = []
 
 # Enable Python installation management (uv python install/uninstall/pin/dir/update-shell).
 # Disable to strip download-from-python-build-standalone functionality while keeping
 # Python discovery (uv python find/list, uv sync against existing venvs) intact.
-python-managed = ["uv-cli/python-managed", "uv-python/python-managed"]
+# Implies `python` since the install/pin/dir/update-shell subcommands live under `uv python`.
+python-managed = ["python", "uv-cli/python-managed", "uv-python/python-managed"]
 
 # Enable `uv publish` subcommand and its uv-publish sub-crate.
 publish = ["dep:uv-publish", "uv-cli/publish"]
@@ -176,6 +177,27 @@ audit = ["dep:uv-audit", "uv-cli/audit"]
 
 # Enable `uv init` subcommand (no dedicated sub-crate drop).
 init = ["uv-cli/init"]
+
+# Enable `uv pip` namespace (compile/sync/install/uninstall/freeze/list/show/tree/check).
+pip = ["uv-cli/pip"]
+
+# Enable `uv python` namespace (find/list always; managed installs require `python-managed`).
+python = ["uv-cli/python"]
+
+# Enable `uv build` subcommand (frontend wheel/sdist build).
+build = ["uv-cli/build"]
+
+# Enable `uv venv` subcommand.
+venv = ["uv-cli/venv"]
+
+# Enable `uv cache` namespace (clean/prune/dir/size) and the hidden `uv clean` alias.
+cache = ["uv-cli/cache"]
+
+# Enable `uv auth` namespace (login/logout/token/dir/helper).
+auth = ["uv-cli/auth"]
+
+# Enable `uv workspace` namespace (metadata/dir/list).
+workspace = ["uv-cli/workspace"]
 
 # Enable the `uv self` namespace (version + update).
 # Enabling `self-update` also enables `self-commands`, but `self-commands` alone keeps

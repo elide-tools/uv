@@ -9,25 +9,44 @@ use anyhow::Context;
 use owo_colors::OwoColorize;
 use tracing::debug;
 
+#[cfg(feature = "auth")]
 pub(crate) use auth::dir::dir as auth_dir;
+#[cfg(feature = "auth")]
 pub(crate) use auth::helper::helper as auth_helper;
+#[cfg(feature = "auth")]
 pub(crate) use auth::login::login as auth_login;
+#[cfg(feature = "auth")]
 pub(crate) use auth::logout::logout as auth_logout;
+#[cfg(feature = "auth")]
 pub(crate) use auth::token::token as auth_token;
+#[cfg(feature = "build")]
 pub(crate) use build_frontend::build_frontend;
+#[cfg(feature = "cache")]
 pub(crate) use cache_clean::cache_clean;
+#[cfg(feature = "cache")]
 pub(crate) use cache_dir::cache_dir;
+#[cfg(feature = "cache")]
 pub(crate) use cache_prune::cache_prune;
+#[cfg(feature = "cache")]
 pub(crate) use cache_size::cache_size;
 pub(crate) use help::help;
+#[cfg(feature = "pip")]
 pub(crate) use pip::check::pip_check;
+#[cfg(feature = "pip")]
 pub(crate) use pip::compile::pip_compile;
+#[cfg(feature = "pip")]
 pub(crate) use pip::freeze::pip_freeze;
+#[cfg(feature = "pip")]
 pub(crate) use pip::install::pip_install;
+#[cfg(feature = "pip")]
 pub(crate) use pip::list::pip_list;
+#[cfg(feature = "pip")]
 pub(crate) use pip::show::pip_show;
+#[cfg(feature = "pip")]
 pub(crate) use pip::sync::pip_sync;
+#[cfg(feature = "pip")]
 pub(crate) use pip::tree::pip_tree;
+#[cfg(feature = "pip")]
 pub(crate) use pip::uninstall::pip_uninstall;
 pub(crate) use project::add::add;
 #[cfg(feature = "audit")]
@@ -44,20 +63,23 @@ pub(crate) use project::tree::tree;
 pub(crate) use project::version::{project_version, self_version};
 #[cfg(feature = "publish")]
 pub(crate) use publish::publish;
+#[cfg(feature = "python")]
 pub(crate) use python::find::find as python_find;
+#[cfg(feature = "python")]
 pub(crate) use python::find::find_script as python_find_script;
+#[cfg(feature = "python")]
 pub(crate) use python::list::list as python_list;
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::dir::dir as python_dir;
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::install as python_install;
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::{PythonUpgrade, PythonUpgradeSource};
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::pin::pin as python_pin;
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::uninstall::uninstall as python_uninstall;
-#[cfg(feature = "python-managed")]
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::update_shell::update_shell as python_update_shell;
 #[cfg(feature = "self-update")]
 pub(crate) use self_update::self_update;
@@ -84,20 +106,30 @@ use uv_fs::{CWD, Simplified};
 use uv_installer::compile_tree;
 use uv_python::PythonEnvironment;
 use uv_scripts::Pep723Script;
+#[cfg(feature = "venv")]
 pub(crate) use venv::venv;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::dir::dir;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::list::list;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::metadata::metadata;
 
 use crate::commands::pip::operations::ChangedDist;
 use crate::printer::Printer;
 
+#[cfg(feature = "auth")]
 mod auth;
 pub(crate) mod build_backend;
+#[cfg(feature = "build")]
 mod build_frontend;
+#[cfg(feature = "cache")]
 mod cache_clean;
+#[cfg(feature = "cache")]
 mod cache_dir;
+#[cfg(feature = "cache")]
 mod cache_prune;
+#[cfg(feature = "cache")]
 mod cache_size;
 mod diagnostics;
 mod editable;
@@ -107,13 +139,16 @@ mod project;
 #[cfg(feature = "publish")]
 mod publish;
 mod pylock;
+#[cfg(feature = "python")]
 mod python;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_update;
 #[cfg(feature = "tool")]
 mod tool;
+#[cfg(feature = "venv")]
 mod venv;
+#[cfg(feature = "workspace")]
 mod workspace;
 
 #[derive(Copy, Clone)]

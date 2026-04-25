@@ -61,6 +61,20 @@ audit = ["dep:uv-audit"]
 init = []
 # Enable `uv self` namespace (version + update).
 self-commands = []
+# Enable `uv pip` namespace (compile/sync/install/uninstall/freeze/list/show/tree/check).
+pip = []
+# Enable `uv python` namespace (find/list, plus python-managed gates managed installs).
+python = []
+# Enable `uv build` subcommand (frontend wheel/sdist build).
+build = []
+# Enable `uv venv` subcommand.
+venv = []
+# Enable `uv cache` namespace (clean/prune/dir/size) and the hidden `uv clean` alias.
+cache = []
+# Enable `uv auth` namespace (login/logout/token/dir/helper).
+auth = []
+# Enable `uv workspace` namespace (metadata/dir/list).
+workspace = []
 
 [build-dependencies]
 uv-static = { workspace = true }

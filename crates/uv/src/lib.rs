@@ -17,6 +17,7 @@ use clap::error::{ContextKind, ContextValue};
 use clap::{CommandFactory, Parser};
 use futures::FutureExt;
 use owo_colors::OwoColorize;
+#[cfg(feature = "pip")]
 use settings::PipTreeSettings;
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
@@ -25,12 +26,19 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
-use uv_cli::{
-    AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
-    CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
-    PythonNamespace, TopLevelArgs,
-    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
-};
+use uv_cli::{BuildBackendCommand, Cli, Commands, ProjectCommand, TopLevelArgs};
+#[cfg(any(feature = "pip", feature = "venv"))]
+use uv_cli::compat::CompatArgs;
+#[cfg(feature = "auth")]
+use uv_cli::{AuthCommand, AuthHelperCommand, AuthNamespace};
+#[cfg(feature = "cache")]
+use uv_cli::{CacheCommand, CacheNamespace};
+#[cfg(feature = "pip")]
+use uv_cli::{PipCommand, PipNamespace};
+#[cfg(feature = "python")]
+use uv_cli::{PythonCommand, PythonNamespace};
+#[cfg(feature = "workspace")]
+use uv_cli::{WorkspaceCommand, WorkspaceNamespace};
 #[cfg(feature = "self-commands")]
 use uv_cli::{SelfCommand, SelfNamespace};
 #[cfg(feature = "tool")]
@@ -44,8 +52,11 @@ use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
+#[cfg(feature = "venv")]
 use uv_python::PythonRequest;
-use uv_requirements::{GroupsSpecification, RequirementsSource};
+use uv_requirements::RequirementsSource;
+#[cfg(feature = "pip")]
+use uv_requirements::GroupsSpecification;
 use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
@@ -57,9 +68,11 @@ use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
 #[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
 use crate::printer::Printer;
+use crate::settings::{CacheSettings, GlobalSettings};
+#[cfg(feature = "pip")]
 use crate::settings::{
-    CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,
-    PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipUninstallSettings,
+    PipCheckSettings, PipCompileSettings, PipFreezeSettings, PipInstallSettings, PipListSettings,
+    PipShowSettings, PipSyncSettings, PipUninstallSettings,
     resolve_color,
 };
 #[cfg(feature = "publish")]
@@ -70,6 +83,29 @@ pub(crate) mod commands;
 pub(crate) mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;
+
+/// Returns the script path from `uv python find <script>` if matched, `None` otherwise.
+/// Centralized so the `python` feature gate stays out of the surrounding pipeline.
+#[cfg(feature = "python")]
+fn python_find_script_path(command: &Commands) -> Option<&Path> {
+    if let Commands::Python(PythonNamespace {
+        command:
+            PythonCommand::Find(uv_cli::PythonFindArgs {
+                script: Some(script),
+                ..
+            }),
+    }) = command
+    {
+        Some(script.as_path())
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "python"))]
+fn python_find_script_path(_command: &Commands) -> Option<&Path> {
+    None
+}
 
 /// Returns `true` for commands that operate at the user-level and should ignore local workspace
 /// configuration. Centralizes the `Commands::Tool(_) | Commands::Self_(_)` check so it compiles
@@ -245,14 +281,20 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
             // Preview APIs. Ignore `--isolated` and warn.
             #[cfg(feature = "tool")]
-            Commands::Project(_) | Commands::Tool(_) | Commands::Python(_) => {
+            Commands::Tool(_) => {
                 warn_user!(
                     "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
                 );
                 false
             }
-            #[cfg(not(feature = "tool"))]
-            Commands::Project(_) | Commands::Python(_) => {
+            #[cfg(feature = "python")]
+            Commands::Python(_) => {
+                warn_user!(
+                    "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
+                );
+                false
+            }
+            Commands::Project(_) => {
                 warn_user!(
                     "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
                 );
@@ -400,14 +442,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             },
             _ => None,
         }
-    } else if let Commands::Python(uv_cli::PythonNamespace {
-        command:
-            PythonCommand::Find(uv_cli::PythonFindArgs {
-                script: Some(script),
-                ..
-            }),
-    }) = &*cli.command
-    {
+    } else if let Some(script) = python_find_script_path(&cli.command) {
         match Pep723Script::read(&script).await {
             Ok(Some(script)) => Some(Pep723Item::Script(script)),
             Ok(None) => {
@@ -568,6 +603,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
     .no_proxy(globals.network_settings.no_proxy.clone());
 
     match *cli.command {
+        #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Login(args),
         }) => {
@@ -586,6 +622,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Logout(args),
         }) => {
@@ -602,6 +639,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Token(args),
         }) => {
@@ -618,12 +656,14 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Dir(args),
         }) => {
             commands::auth_dir(args.service.as_ref(), printer)?;
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Helper(args),
         }) => {
@@ -645,6 +685,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             printer,
             args.no_pager,
         ),
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Compile(args),
         }) => {
@@ -762,6 +803,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Sync(args),
         }) => {
@@ -849,6 +891,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Install(args),
         }) => {
@@ -1009,6 +1052,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Uninstall(args),
         }) => {
@@ -1047,6 +1091,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Freeze(args),
         }) => {
@@ -1072,6 +1117,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 globals.preview,
             )
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::List(args),
         }) => {
@@ -1108,6 +1154,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Show(args),
         }) => {
@@ -1132,6 +1179,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 globals.preview,
             )
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Tree(args),
         }) => {
@@ -1166,6 +1214,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Check(args),
         }) => {
@@ -1187,11 +1236,13 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 globals.preview,
             )
         }
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace {
             command: PipCommand::Debug(_),
         }) => Err(anyhow!(
             "pip's `debug` is unsupported (consider using `uvx pip debug` instead)"
         )),
+        #[cfg(feature = "cache")]
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Clean(args),
         })
@@ -1199,18 +1250,22 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             show_settings!(args);
             commands::cache_clean(&args.package, args.force, cache, printer).await
         }
+        #[cfg(feature = "cache")]
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Prune(args),
         }) => {
             show_settings!(args);
             commands::cache_prune(args.ci, args.force, cache, printer).await
         }
+        #[cfg(feature = "cache")]
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Dir,
         }) => commands::cache_dir(&cache, printer),
+        #[cfg(feature = "cache")]
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Size(args),
         }) => commands::cache_size(&cache, args.human, printer, globals.preview),
+        #[cfg(feature = "build")]
         Commands::Build(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::BuildSettings::resolve(args, filesystem, environment);
@@ -1265,6 +1320,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "venv")]
         Commands::Venv(args) => {
             args.compat_args.validate()?;
 
@@ -1714,6 +1770,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             commands::tool_dir(args.bin, globals.preview, printer)?;
             Ok(ExitStatus::Success)
         }
+        #[cfg(feature = "python")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::List(args),
         }) => {
@@ -1744,7 +1801,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Install(args),
         }) => {
@@ -1779,7 +1836,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Upgrade(args),
         }) => {
@@ -1815,7 +1872,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Uninstall(args),
         }) => {
@@ -1825,6 +1882,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
             commands::python_uninstall(args.install_dir, args.targets, args.all, printer).await
         }
+        #[cfg(feature = "python")]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Find(args),
         }) => {
@@ -1869,7 +1927,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 .await
             }
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Pin(args),
         }) => {
@@ -1897,7 +1955,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::Dir(args),
         }) => {
@@ -1908,7 +1966,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             commands::python_dir(args.bin, printer)?;
             Ok(ExitStatus::Success)
         }
-        #[cfg(feature = "python-managed")]
+        #[cfg(all(feature = "python", feature = "python-managed"))]
         Commands::Python(PythonNamespace {
             command: PythonCommand::UpdateShell,
         }) => {
@@ -1966,6 +2024,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             )
             .await
         }
+        #[cfg(feature = "workspace")]
         Commands::Workspace(WorkspaceNamespace { command }) => match command {
             WorkspaceCommand::Metadata(args) => {
                 // Resolve the settings from the command-line arguments and workspace configuration.
