@@ -68,12 +68,11 @@ use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
 #[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
 use crate::printer::Printer;
-use crate::settings::{CacheSettings, GlobalSettings};
+use crate::settings::{CacheSettings, GlobalSettings, resolve_color};
 #[cfg(feature = "pip")]
 use crate::settings::{
     PipCheckSettings, PipCompileSettings, PipFreezeSettings, PipInstallSettings, PipListSettings,
     PipShowSettings, PipSyncSettings, PipUninstallSettings,
-    resolve_color,
 };
 #[cfg(feature = "publish")]
 use crate::settings::PublishSettings;

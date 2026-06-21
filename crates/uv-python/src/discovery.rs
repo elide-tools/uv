@@ -27,7 +27,9 @@ use uv_warnings::anstream;
 use uv_warnings::warn_user_once;
 use which::{which, which_all};
 
-use crate::downloads::{ManagedPythonDownloadList, PlatformRequest, PythonDownloadRequest};
+use crate::downloads::{PlatformRequest, PythonDownloadRequest};
+#[cfg(feature = "python-managed")]
+use crate::downloads::ManagedPythonDownloadList;
 use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::interpreter::Error as InterpreterError;
@@ -1404,7 +1406,9 @@ pub(crate) async fn find_best_python_installation(
     debug!("Starting Python discovery for {request}");
     let original_request = request;
 
+    #[cfg(feature = "python-managed")]
     let mut previous_fetch_failed = false;
+    #[cfg(feature = "python-managed")]
     let mut download_state = None;
 
     let request_without_patch = match request {
