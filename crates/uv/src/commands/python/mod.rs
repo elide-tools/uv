@@ -1,9 +1,9 @@
-pub(crate) mod find;
-pub(crate) mod list;
 #[cfg(feature = "python-managed")]
 pub(crate) mod dir;
+pub(crate) mod find;
 #[cfg(feature = "python-managed")]
 pub(crate) mod install;
+pub(crate) mod list;
 #[cfg(feature = "python-managed")]
 pub(crate) mod pin;
 #[cfg(feature = "python-managed")]

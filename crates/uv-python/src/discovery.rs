@@ -27,9 +27,9 @@ use uv_warnings::anstream;
 use uv_warnings::warn_user_once;
 use which::{which, which_all};
 
-use crate::downloads::{PlatformRequest, PythonDownloadRequest};
 #[cfg(feature = "python-managed")]
 use crate::downloads::ManagedPythonDownloadList;
+use crate::downloads::{PlatformRequest, PythonDownloadRequest};
 use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::interpreter::Error as InterpreterError;
@@ -1389,7 +1389,10 @@ pub(crate) fn find_python_installation(
 ///
 /// See [`find_python_installation`] for more details on installation discovery.
 #[instrument(skip_all, fields(request))]
-#[cfg_attr(not(feature = "python-managed"), allow(unused_variables, unused_mut, dead_code))]
+#[cfg_attr(
+    not(feature = "python-managed"),
+    allow(unused_variables, unused_mut, dead_code)
+)]
 pub(crate) async fn find_best_python_installation(
     request: &PythonRequest,
     environments: EnvironmentPreference,

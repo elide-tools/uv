@@ -20,12 +20,12 @@ use uv_pep440::{Prerelease, Version};
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_preview::Preview;
 
-use crate::discovery::{EnvironmentPreference, PythonRequest, find_python_installation};
 #[cfg(feature = "python-managed")]
 use crate::discovery::find_best_python_installation;
-use crate::downloads::{ManagedPythonDownloadList, PythonDownloadRequest, Reporter};
+use crate::discovery::{EnvironmentPreference, PythonRequest, find_python_installation};
 #[cfg(feature = "python-managed")]
-use crate::downloads::{DownloadResult, ManagedPythonDownload, Error as DownloadError};
+use crate::downloads::{DownloadResult, Error as DownloadError, ManagedPythonDownload};
+use crate::downloads::{ManagedPythonDownloadList, PythonDownloadRequest, Reporter};
 use crate::implementation::LenientImplementationName;
 #[cfg(feature = "python-managed")]
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
@@ -159,7 +159,14 @@ impl PythonInstallation {
         let client = client_builder.clone().retries(0).build()?;
         let download_list =
             ManagedPythonDownloadList::new(&client, python_downloads_json_url).await?;
-        Self::find(request, environments, preference, &download_list, cache, preview)
+        Self::find(
+            request,
+            environments,
+            preference,
+            &download_list,
+            cache,
+            preview,
+        )
     }
 
     /// Find or fetch a [`PythonInstallation`].
@@ -345,7 +352,14 @@ impl PythonInstallation {
         let client = client_builder.clone().retries(0).build()?;
         let download_list =
             ManagedPythonDownloadList::new(&client, python_downloads_json_url).await?;
-        Self::find(request, environments, preference, &download_list, cache, preview)
+        Self::find(
+            request,
+            environments,
+            preference,
+            &download_list,
+            cache,
+            preview,
+        )
     }
 
     /// Download and install the requested installation.

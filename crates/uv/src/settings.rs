@@ -16,43 +16,46 @@ use crate::commands::{PythonUpgrade, PythonUpgradeSource};
 #[cfg(feature = "auth")]
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
+#[cfg(feature = "build")]
+use uv_cli::BuildArgs;
+#[cfg(feature = "init")]
+use uv_cli::InitArgs;
+#[cfg(feature = "publish")]
+use uv_cli::PublishArgs;
+#[cfg(feature = "venv")]
+use uv_cli::VenvArgs;
 use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
     AddArgs, ColorChoice, ExternalCommand, GlobalArgs, ListFormat, LockArgs, Maybe, MetadataArgs,
     PythonListFormat, RemoveArgs, RunArgs, SyncArgs, SyncFormat, TreeArgs, VersionArgs,
     VersionBumpSpec, VersionFormat,
 };
-#[cfg(feature = "auth")]
-use uv_cli::{AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs};
-#[cfg(feature = "pip")]
-use uv_cli::{
-    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
-    PipSyncArgs, PipTreeArgs, PipUninstallArgs,
-};
-#[cfg(feature = "python")]
-use uv_cli::{PythonFindArgs, PythonListArgs};
-#[cfg(feature = "venv")]
-use uv_cli::VenvArgs;
 #[cfg(feature = "audit")]
 use uv_cli::{AuditArgs, AuditOutputFormat};
-#[cfg(feature = "init")]
-use uv_cli::InitArgs;
-#[cfg(feature = "python-managed")]
-use uv_cli::{PythonDirArgs, PythonInstallArgs, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs};
+#[cfg(feature = "auth")]
+use uv_cli::{AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs};
 use uv_cli::{
-    AuthorFrom, ExportArgs, FormatArgs,
-    ResolverInstallerArgs,
+    AuthorFrom, ExportArgs, FormatArgs, ResolverInstallerArgs,
     options::{
         Flag, FlagSource, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options,
     },
 };
-#[cfg(feature = "build")]
-use uv_cli::BuildArgs;
-#[cfg(feature = "publish")]
-use uv_cli::PublishArgs;
+#[cfg(feature = "pip")]
+use uv_cli::{
+    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
+    PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+};
+#[cfg(feature = "python-managed")]
+use uv_cli::{
+    PythonDirArgs, PythonInstallArgs, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
+};
+#[cfg(feature = "python")]
+use uv_cli::{PythonFindArgs, PythonListArgs};
 #[cfg(feature = "tool")]
-use uv_cli::{ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs, ToolUpgradeArgs};
+use uv_cli::{
+    ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs, ToolUpgradeArgs,
+};
 use uv_client::Connectivity;
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DryRun, EditableMode, EnvFile,
@@ -76,12 +79,12 @@ use uv_resolver::{
     AnnotationStyle, DependencyMode, ExcludeNewer, ExcludeNewerPackage, ForkStrategy,
     PrereleaseMode, ResolutionMode,
 };
-use uv_settings::{
-    Combine, EnvironmentOptions, FilesystemOptions, Options, PipOptions,
-    PythonInstallMirrors, ResolverInstallerOptions, ResolverInstallerSchema, ResolverOptions,
-};
 #[cfg(feature = "publish")]
 use uv_settings::PublishOptions;
+use uv_settings::{
+    Combine, EnvironmentOptions, FilesystemOptions, Options, PipOptions, PythonInstallMirrors,
+    ResolverInstallerOptions, ResolverInstallerSchema, ResolverOptions,
+};
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
@@ -90,9 +93,9 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 #[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
+use crate::commands::pip::operations::Modifications;
 #[cfg(feature = "init")]
 use crate::commands::{InitKind, InitProjectKind};
-use crate::commands::pip::operations::Modifications;
 
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";

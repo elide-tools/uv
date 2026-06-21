@@ -26,23 +26,23 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
-use uv_cli::{BuildBackendCommand, Cli, Commands, ProjectCommand, TopLevelArgs};
 #[cfg(any(feature = "pip", feature = "venv"))]
 use uv_cli::compat::CompatArgs;
 #[cfg(feature = "auth")]
 use uv_cli::{AuthCommand, AuthHelperCommand, AuthNamespace};
+use uv_cli::{BuildBackendCommand, Cli, Commands, ProjectCommand, TopLevelArgs};
 #[cfg(feature = "cache")]
 use uv_cli::{CacheCommand, CacheNamespace};
 #[cfg(feature = "pip")]
 use uv_cli::{PipCommand, PipNamespace};
 #[cfg(feature = "python")]
 use uv_cli::{PythonCommand, PythonNamespace};
-#[cfg(feature = "workspace")]
-use uv_cli::{WorkspaceCommand, WorkspaceNamespace};
 #[cfg(feature = "self-commands")]
 use uv_cli::{SelfCommand, SelfNamespace};
 #[cfg(feature = "tool")]
 use uv_cli::{ToolCommand, ToolNamespace};
+#[cfg(feature = "workspace")]
+use uv_cli::{WorkspaceCommand, WorkspaceNamespace};
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
 use uv_flags::EnvironmentFlags;
@@ -54,9 +54,9 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 #[cfg(feature = "venv")]
 use uv_python::PythonRequest;
-use uv_requirements::RequirementsSource;
 #[cfg(feature = "pip")]
 use uv_requirements::GroupsSpecification;
+use uv_requirements::RequirementsSource;
 use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
@@ -64,21 +64,22 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
 #[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
+use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
 use crate::printer::Printer;
+#[cfg(feature = "publish")]
+use crate::settings::PublishSettings;
 use crate::settings::{CacheSettings, GlobalSettings, resolve_color};
 #[cfg(feature = "pip")]
 use crate::settings::{
     PipCheckSettings, PipCompileSettings, PipFreezeSettings, PipInstallSettings, PipListSettings,
     PipShowSettings, PipSyncSettings, PipUninstallSettings,
 };
-#[cfg(feature = "publish")]
-use crate::settings::PublishSettings;
 
 pub(crate) mod child;
 pub(crate) mod commands;
+pub mod embedded_progress;
 pub(crate) mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;

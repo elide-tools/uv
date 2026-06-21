@@ -63,18 +63,18 @@ pub(crate) use project::tree::tree;
 pub(crate) use project::version::{project_version, self_version};
 #[cfg(feature = "publish")]
 pub(crate) use publish::publish;
+#[cfg(all(feature = "python", feature = "python-managed"))]
+pub(crate) use python::dir::dir as python_dir;
 #[cfg(feature = "python")]
 pub(crate) use python::find::find as python_find;
 #[cfg(feature = "python")]
 pub(crate) use python::find::find_script as python_find_script;
-#[cfg(feature = "python")]
-pub(crate) use python::list::list as python_list;
-#[cfg(all(feature = "python", feature = "python-managed"))]
-pub(crate) use python::dir::dir as python_dir;
 #[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::install as python_install;
 #[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::{PythonUpgrade, PythonUpgradeSource};
+#[cfg(feature = "python")]
+pub(crate) use python::list::list as python_list;
 #[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::pin::pin as python_pin;
 #[cfg(all(feature = "python", feature = "python-managed"))]
