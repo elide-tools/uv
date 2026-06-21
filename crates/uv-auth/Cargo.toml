@@ -15,10 +15,23 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+default = []
+# Enable native platform keyring backends. Embedders that only need
+# plaintext/env/netrc auth can leave this off to avoid secret-service/zbus and
+# platform credential-store dependencies.
+native-keyring = [
+    "uv-keyring/apple-native",
+    "uv-keyring/secret-service",
+    "uv-keyring/windows-native",
+]
+# Enable cloud object-store request signing for S3, GCS, and Azure endpoints.
+cloud-auth = ["dep:reqsign"]
+
 [dependencies]
 uv-cache-key = { workspace = true }
 uv-fs = { workspace = true }
-uv-keyring = { workspace = true, features = ["apple-native", "secret-service", "windows-native"] }
+uv-keyring = { workspace = true }
 uv-netrc = { workspace = true }
 uv-once-map = { workspace = true }
 uv-preview = { workspace = true }
@@ -38,7 +51,7 @@ futures = { workspace = true }
 http = { workspace = true }
 jiff = { workspace = true }
 percent-encoding = { workspace = true }
-reqsign = { workspace = true }
+reqsign = { workspace = true, optional = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
 rustc-hash = { workspace = true }

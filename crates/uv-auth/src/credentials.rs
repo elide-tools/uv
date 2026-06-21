@@ -2,17 +2,24 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
+#[cfg(feature = "cloud-auth")]
 use std::str::FromStr;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::read::DecoderReader;
 use base64::write::EncoderWriter;
+#[cfg(feature = "cloud-auth")]
 use http::Uri;
+#[cfg(feature = "cloud-auth")]
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
+#[cfg(feature = "cloud-auth")]
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
+#[cfg(feature = "cloud-auth")]
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
 use reqwest::Request;
-use reqwest::header::{HeaderName, HeaderValue};
+#[cfg(feature = "cloud-auth")]
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -21,6 +28,7 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
+#[cfg(feature = "cloud-auth")]
 const AZURE_STORAGE_VERSION: &str = "2023-11-03";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -393,12 +401,15 @@ pub(crate) enum Authentication {
     Credentials(Credentials),
 
     /// AWS Signature Version 4 signing.
+    #[cfg(feature = "cloud-auth")]
     AwsSigner(AwsDefaultSigner),
 
     /// Google Cloud signing.
+    #[cfg(feature = "cloud-auth")]
     GcsSigner(GcsDefaultSigner),
 
     /// Azure Storage signing.
+    #[cfg(feature = "cloud-auth")]
     AzureSigner(AzureDefaultSigner),
 }
 
@@ -408,6 +419,7 @@ pub(crate) enum AuthenticationError {
     InvalidUri(#[from] http::uri::InvalidUri),
 
     #[error("Failed to build request for {provider} signing")]
+    #[cfg(feature = "cloud-auth")]
     BuildRequest {
         provider: &'static str,
         #[source]
@@ -415,6 +427,7 @@ pub(crate) enum AuthenticationError {
     },
 
     #[error("Failed to sign request with {provider} credentials")]
+    #[cfg(feature = "cloud-auth")]
     Sign {
         provider: &'static str,
         #[source]
@@ -426,9 +439,13 @@ impl PartialEq for Authentication {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Credentials(a), Self::Credentials(b)) => a == b,
+            #[cfg(feature = "cloud-auth")]
             (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
+            #[cfg(feature = "cloud-auth")]
             (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
+            #[cfg(feature = "cloud-auth")]
             (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
+            #[cfg(feature = "cloud-auth")]
             _ => false,
         }
     }
@@ -442,18 +459,21 @@ impl From<Credentials> for Authentication {
     }
 }
 
+#[cfg(feature = "cloud-auth")]
 impl From<AwsDefaultSigner> for Authentication {
     fn from(signer: AwsDefaultSigner) -> Self {
         Self::AwsSigner(signer)
     }
 }
 
+#[cfg(feature = "cloud-auth")]
 impl From<GcsDefaultSigner> for Authentication {
     fn from(signer: GcsDefaultSigner) -> Self {
         Self::GcsSigner(signer)
     }
 }
 
+#[cfg(feature = "cloud-auth")]
 impl From<AzureDefaultSigner> for Authentication {
     fn from(signer: AzureDefaultSigner) -> Self {
         Self::AzureSigner(signer)
@@ -465,6 +485,7 @@ impl Authentication {
     pub(crate) fn password(&self) -> Option<&str> {
         match self {
             Self::Credentials(credentials) => credentials.password(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
         }
     }
@@ -473,6 +494,7 @@ impl Authentication {
     pub(crate) fn username(&self) -> Option<&str> {
         match self {
             Self::Credentials(credentials) => credentials.username(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
         }
     }
@@ -481,6 +503,7 @@ impl Authentication {
     pub(crate) fn as_username(&self) -> Cow<'_, Username> {
         match self {
             Self::Credentials(credentials) => credentials.as_username(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => {
                 Cow::Owned(Username::none())
             }
@@ -491,6 +514,7 @@ impl Authentication {
     pub(crate) fn to_username(&self) -> Username {
         match self {
             Self::Credentials(credentials) => credentials.to_username(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::none(),
         }
     }
@@ -499,6 +523,7 @@ impl Authentication {
     pub(crate) fn is_authenticated(&self) -> bool {
         match self {
             Self::Credentials(credentials) => credentials.is_authenticated(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => true,
         }
     }
@@ -507,6 +532,7 @@ impl Authentication {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             Self::Credentials(credentials) => credentials.is_empty(),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => false,
         }
     }
@@ -516,11 +542,13 @@ impl Authentication {
     /// Any existing credentials will be overridden.
     pub(crate) async fn authenticate(
         &self,
-        mut request: Request,
+        request: Request,
     ) -> Result<Request, AuthenticationError> {
         match self {
             Self::Credentials(credentials) => Ok(credentials.authenticate(request)),
+            #[cfg(feature = "cloud-auth")]
             Self::AwsSigner(signer) => {
+                let mut request = request;
                 // Build an `http::Request` from the `reqwest::Request`.
                 let uri = Uri::from_str(request.url().as_str())?;
                 let mut http_req = http::Request::builder()
@@ -552,7 +580,9 @@ impl Authentication {
                 }
                 Ok(request)
             }
+            #[cfg(feature = "cloud-auth")]
             Self::GcsSigner(signer) => {
+                let mut request = request;
                 // Build an `http::Request` from the `reqwest::Request`.
                 let uri = Uri::from_str(request.url().as_str())?;
                 let mut http_req = http::Request::builder()
@@ -584,7 +614,9 @@ impl Authentication {
                 }
                 Ok(request)
             }
+            #[cfg(feature = "cloud-auth")]
             Self::AzureSigner(signer) => {
+                let mut request = request;
                 // Build an `http::Request` from the `reqwest::Request`.
                 let uri = Uri::from_str(request.url().as_str())?;
                 let mut http_req = http::Request::builder()
@@ -624,7 +656,7 @@ impl Authentication {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cloud-auth"))]
 mod tests {
     use insta::assert_debug_snapshot;
     use reqsign::aws::Credential as AwsCredential;

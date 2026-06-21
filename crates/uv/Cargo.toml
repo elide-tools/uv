@@ -158,7 +158,9 @@ uv-unix = { workspace = true }
 
 [features]
 default = ["performance", "static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace"]
-native-auth = []
+native-auth = ["native-keyring"]
+native-keyring = ["uv-auth/native-keyring"]
+cloud-auth = ["uv-auth/cloud-auth"]
 
 # Static linking (xz2 in particular) for sdist extraction.
 static = ["uv-distribution/static"]
