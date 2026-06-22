@@ -163,7 +163,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         concurrency.downloads_semaphore.clone(),
                     ),
                 )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .with_reporter(Arc::new(
+                    ResolverReporter::from(printer).without_embedded_root(),
+                ))
                 .resolve(unnamed.into_iter())
                 .await?,
             );
@@ -181,7 +183,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     concurrency.downloads_semaphore.clone(),
                 ),
             )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .with_reporter(Arc::new(
+                ResolverReporter::from(printer).without_embedded_root(),
+            ))
             .resolve(source_trees.iter())
             .await?;
 
@@ -298,7 +302,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         concurrency.downloads_semaphore.clone(),
                     ),
                 )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .with_reporter(Arc::new(
+                    ResolverReporter::from(printer).without_embedded_root(),
+                ))
                 .resolve(unnamed.into_iter())
                 .await?,
             );
@@ -333,7 +339,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     concurrency.downloads_semaphore.clone(),
                 ),
             )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .with_reporter(Arc::new(
+                ResolverReporter::from(printer).without_embedded_root(),
+            ))
             .resolve(&resolver_env)
             .await?;
             hasher = updated_hasher;

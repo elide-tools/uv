@@ -697,6 +697,12 @@ impl ResolverReporter {
         self.reporter.set_root_length(length);
         self
     }
+
+    #[must_use]
+    pub(crate) fn without_embedded_root(mut self) -> Self {
+        self.reporter.embedded_root = None;
+        self
+    }
 }
 
 impl From<Printer> for ResolverReporter {
