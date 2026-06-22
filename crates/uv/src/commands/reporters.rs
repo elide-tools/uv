@@ -712,11 +712,11 @@ impl From<Printer> for ResolverReporter {
                 .unwrap()
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
-        root.set_message("Resolving dependencies...");
+        root.set_message("Resolving Python dependencies...");
 
         let embedded_root = embedded_progress::start_task(
             None,
-            "Resolving dependencies",
+            "Resolving Python dependencies",
             None,
             ProgressUnit::Count,
         );
@@ -744,7 +744,7 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_complete(&self) {
         self.reporter.root.set_message("");
         self.reporter.root.finish_and_clear();
-        self.reporter.finish_root("Resolved dependencies");
+        self.reporter.finish_root("Python dependencies resolved");
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
@@ -820,9 +820,13 @@ impl From<Printer> for InstallReporter {
         progress.set_style(
             ProgressStyle::with_template("{bar:20} [{pos}/{len}] {wide_msg:.dim}").unwrap(),
         );
-        progress.set_message("Installing wheels...");
-        let embedded_root =
-            embedded_progress::start_task(None, "Installing wheels", None, ProgressUnit::Count);
+        progress.set_message("Installing Python packages...");
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Installing Python packages",
+            None,
+            ProgressUnit::Count,
+        );
         Self {
             progress,
             embedded_root,
@@ -866,7 +870,7 @@ impl uv_installer::InstallReporter for InstallReporter {
         self.progress.finish_and_clear();
         if let Some(id) = self.embedded_root {
             embedded_progress::with_progress_sink(|sink| {
-                sink.finish_task(id, ProgressOutcome::Success, "Installed wheels");
+                sink.finish_task(id, ProgressOutcome::Success, "Python packages installed");
             });
         }
     }
@@ -890,13 +894,7 @@ impl PythonDownloadReporter {
             length,
             progress_target(printer),
         ));
-        let embedded_root = embedded_progress::start_task(
-            None,
-            "Downloading Python runtime",
-            length,
-            ProgressUnit::Count,
-        );
-        let reporter = ProgressReporter::new(root, multi_progress, printer, embedded_root);
+        let reporter = ProgressReporter::new(root, multi_progress, printer, None);
         Self { reporter }
     }
 }
