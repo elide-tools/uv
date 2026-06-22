@@ -49,12 +49,23 @@ pub trait ProgressSink: Send + Sync + 'static {
 static ACTIVE: OnceLock<RwLock<Option<Arc<dyn ProgressSink>>>> = OnceLock::new();
 static NEXT_TASK: AtomicUsize = AtomicUsize::new(1);
 
+struct ProgressWarningSink {
+    sink: Arc<dyn ProgressSink>,
+}
+
+impl uv_warnings::WarningSink for ProgressWarningSink {
+    fn warning(&self, message: &str) {
+        self.sink.message(message);
+    }
+}
+
 fn active() -> &'static RwLock<Option<Arc<dyn ProgressSink>>> {
     ACTIVE.get_or_init(|| RwLock::new(None))
 }
 
 pub struct ProgressSinkGuard {
     previous: Option<Arc<dyn ProgressSink>>,
+    _warning_guard: uv_warnings::WarningSinkGuard,
 }
 
 impl Drop for ProgressSinkGuard {
@@ -66,11 +77,16 @@ impl Drop for ProgressSinkGuard {
 }
 
 pub fn install_progress_sink(sink: Arc<dyn ProgressSink>) -> ProgressSinkGuard {
+    let warning_sink = Arc::new(ProgressWarningSink { sink: sink.clone() });
+    let warning_guard = uv_warnings::install_warning_sink(warning_sink);
     let previous = active()
         .write()
         .ok()
         .and_then(|mut guard| guard.replace(sink));
-    ProgressSinkGuard { previous }
+    ProgressSinkGuard {
+        previous,
+        _warning_guard: warning_guard,
+    }
 }
 
 pub fn has_progress_sink() -> bool {
