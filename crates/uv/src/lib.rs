@@ -547,7 +547,10 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
     anstream::ColorChoice::write_global(globals.color.into());
 
-    miette::set_hook(Box::new(|_| {
+    // miette's report hook is process-global. Embedded hosts can run uv after
+    // another in-process resolver has already installed a hook, so tolerate
+    // the one supported failure mode and keep the first hook.
+    let _ = miette::set_hook(Box::new(|_| {
         Box::new(
             miette::MietteHandlerOpts::new()
                 .break_words(false)
@@ -560,7 +563,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 )
                 .build(),
         )
-    }))?;
+    }));
 
     // Don't initialize the rayon threadpool yet, this is too costly when we're doing a noop sync.
     uv_configuration::RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
