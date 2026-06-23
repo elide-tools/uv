@@ -879,6 +879,10 @@ pub(crate) fn report_interpreter(
     dimmed: bool,
     printer: Printer,
 ) -> Result<(), Error> {
+    if crate::embedded_progress::has_progress_sink() {
+        return Ok(());
+    }
+
     let managed = python.source().is_managed();
     let implementation = python.implementation();
     let interpreter = python.interpreter();
