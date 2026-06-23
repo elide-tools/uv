@@ -493,6 +493,18 @@ def get_operating_system_and_architecture():
                 "name": "android",
                 "api_level": sys.getandroidapilevel(),
             }
+        elif sys.implementation.name == "graalpy":
+            # Elide-fork: this uv is embedded in Elide, whose GraalPy runs inside
+            # a static (`+crt-static`) musl binary. `sys.executable` then carries
+            # no PT_INTERP for the musl probe above, and the host libc may be
+            # glibc — so neither libc is detectable from the environment even
+            # though the interpreter is always musllinux. Assume the modern
+            # musllinux baseline (PEP 656) rather than failing the query.
+            operating_system = {
+                "name": "musllinux",
+                "major": 1,
+                "minor": 2,
+            }
         else:
             print(json.dumps({"result": "error", "kind": "libc_not_found"}))
             sys.exit(0)
