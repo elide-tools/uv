@@ -12,7 +12,12 @@ use uv_normalize::PackageName;
 
 use crate::commands::pip::operations::{Changelog, ShortSpecifier};
 use crate::commands::{ChangeEvent, ChangeEventKind, elapsed};
+use crate::embedded_progress;
 use crate::printer::Printer;
+
+fn suppress_embedded_output() -> bool {
+    embedded_progress::has_progress_sink()
+}
 
 /// A trait to handle logging during install operations.
 pub(crate) trait InstallLogger {
@@ -69,6 +74,9 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         if count == 0 {
             writeln!(
                 printer.stderr(),
@@ -102,6 +110,9 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         let s = if count == 1 { "" } else { "s" };
         let what = if let Some(suffix) = suffix {
             format!("{count} package{s} {suffix}")
@@ -131,6 +142,9 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         let s = if count == 1 { "" } else { "s" };
         let what = format!("{count} package{s}");
         let what = what.bold();
@@ -156,6 +170,9 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         let s = if count == 1 { "" } else { "s" };
         let what = format!("{count} package{s}");
         let what = what.bold();
@@ -180,6 +197,9 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         _dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         for event in changelog
             .uninstalled
             .iter()
@@ -361,6 +381,9 @@ impl InstallLogger for UpgradeInstallLogger {
         // TODO(tk): Adjust format for dry_run
         _dry_run: DryRun,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         // Index the removals by package name.
         let removals: FxHashMap<&PackageName, BTreeSet<ShortSpecifier>> =
             changelog.uninstalled.iter().fold(
@@ -486,6 +509,9 @@ impl ResolveLogger for DefaultResolveLogger {
         start: std::time::Instant,
         printer: Printer,
     ) -> fmt::Result {
+        if suppress_embedded_output() {
+            return Ok(());
+        }
         if count == 0 {
             writeln!(
                 printer.stderr(),
