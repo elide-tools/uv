@@ -433,6 +433,12 @@ pub enum Commands {
     Auth(AuthNamespace),
 
     /// Manage Python projects.
+    #[cfg(any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    ))]
     #[command(flatten)]
     Project(Box<ProjectCommand>),
 
@@ -559,6 +565,7 @@ pub enum Commands {
     ///
     /// These commands are not directly exposed to the user, instead users invoke their build
     /// frontend (PEP 517) which calls the Python shims which calls back into uv with this method.
+    #[cfg(feature = "build")]
     #[command(hide = true)]
     BuildBackend {
         #[command(subcommand)]
@@ -1061,6 +1068,12 @@ pub enum PipCommand {
     Debug(PipDebugArgs),
 }
 
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 #[derive(Subcommand)]
 pub enum ProjectCommand {
     /// Run a command or script.
@@ -1093,6 +1106,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help run` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "run")]
     Run(RunArgs),
     /// Create a new project.
     ///
@@ -1129,6 +1143,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help add` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Add(AddArgs),
     /// Remove dependencies from the project.
     ///
@@ -1153,8 +1168,10 @@ pub enum ProjectCommand {
         after_help = "Use `uv help remove` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Remove(RemoveArgs),
     /// Read or update the project's version.
+    #[cfg(feature = "project")]
     Version(VersionArgs),
     /// Update the project's environment.
     ///
@@ -1181,6 +1198,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help sync` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Sync(SyncArgs),
     /// Update the project's lockfile.
     ///
@@ -1193,6 +1211,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help lock` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Lock(LockArgs),
     /// Export the project's lockfile to an alternate format.
     ///
@@ -1211,8 +1230,10 @@ pub enum ProjectCommand {
         after_help = "Use `uv help export` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Export(ExportArgs),
     /// Display the project's dependency tree.
+    #[cfg(feature = "project")]
     Tree(TreeArgs),
     /// Format Python code in the project.
     ///
@@ -1228,6 +1249,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help format` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Format(FormatArgs),
     /// Audit the project's dependencies.
     ///

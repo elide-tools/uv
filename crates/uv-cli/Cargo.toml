@@ -61,6 +61,11 @@ audit = ["dep:uv-audit"]
 init = []
 # Enable `uv self` namespace (version + update).
 self-commands = []
+# Enable the `uv project` namespace (sync/lock/add/remove/tree/export/version/format).
+project = []
+# Enable `uv run` (and script execution). Separable from `project` so sync/lock
+# can be reintroduced independently of run.
+run = []
 # Enable `uv pip` namespace (compile/sync/install/uninstall/freeze/list/show/tree/check).
 pip = []
 # Enable `uv python` namespace (find/list, plus python-managed gates managed installs).

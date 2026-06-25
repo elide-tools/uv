@@ -48,18 +48,27 @@ pub(crate) use pip::sync::pip_sync;
 pub(crate) use pip::tree::pip_tree;
 #[cfg(feature = "pip")]
 pub(crate) use pip::uninstall::pip_uninstall;
+#[cfg(feature = "project")]
 pub(crate) use project::add::add;
 #[cfg(feature = "audit")]
 pub(crate) use project::audit::audit;
+#[cfg(feature = "project")]
 pub(crate) use project::export::export;
+#[cfg(feature = "project")]
 pub(crate) use project::format::format;
 #[cfg(feature = "init")]
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
+#[cfg(feature = "project")]
 pub(crate) use project::lock::lock;
+#[cfg(feature = "project")]
 pub(crate) use project::remove::remove;
+#[cfg(feature = "run")]
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
+#[cfg(feature = "project")]
 pub(crate) use project::sync::sync;
+#[cfg(feature = "project")]
 pub(crate) use project::tree::tree;
+#[cfg(feature = "project")]
 pub(crate) use project::version::{project_version, self_version};
 #[cfg(feature = "publish")]
 pub(crate) use publish::publish;
@@ -120,6 +129,7 @@ use crate::printer::Printer;
 
 #[cfg(feature = "auth")]
 mod auth;
+#[cfg(feature = "build")]
 pub(crate) mod build_backend;
 #[cfg(feature = "build")]
 mod build_frontend;
@@ -135,6 +145,12 @@ mod diagnostics;
 mod editable;
 mod help;
 pub(crate) mod pip;
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 mod project;
 #[cfg(feature = "publish")]
 mod publish;

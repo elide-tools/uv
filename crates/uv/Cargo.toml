@@ -18,8 +18,8 @@ workspace = true
 uv-audit = { workspace = true, optional = true }
 uv-auth = { workspace = true }
 uv-bin-install = { workspace = true }
-uv-build-backend = { workspace = true }
-uv-build-frontend = { workspace = true }
+uv-build-backend = { workspace = true, optional = true }
+uv-build-frontend = { workspace = true, optional = true }
 uv-cache = { workspace = true }
 uv-cache-info = { workspace = true }
 uv-cache-key = { workspace = true }
@@ -63,7 +63,7 @@ uv-torch = { workspace = true }
 uv-trampoline-builder = { workspace = true }
 uv-types = { workspace = true }
 uv-version = { workspace = true }
-uv-virtualenv = { workspace = true }
+uv-virtualenv = { workspace = true, optional = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true, features = ["clap"] }
 
@@ -157,7 +157,7 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace", "source-build"]
+default = ["performance", "static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace", "source-build", "project", "run"]
 native-auth = ["native-keyring"]
 native-keyring = ["uv-auth/native-keyring"]
 cloud-auth = ["uv-auth/cloud-auth"]
@@ -182,13 +182,22 @@ python-managed = ["python", "uv-cli/python-managed", "uv-python/python-managed"]
 publish = ["dep:uv-publish", "uv-cli/publish"]
 
 # Enable `uv tool` namespace (install/run/uninstall/list/upgrade/dir) and its uv-tool sub-crate.
-tool = ["dep:uv-tool", "uv-cli/tool"]
+tool = ["dep:uv-tool", "uv-cli/tool", "dep:uv-virtualenv"]
 
 # Enable `uv audit` subcommand and its uv-audit sub-crate.
 audit = ["dep:uv-audit", "uv-cli/audit"]
 
 # Enable `uv init` subcommand (no dedicated sub-crate drop).
 init = ["uv-cli/init"]
+
+# Enable the `uv project` namespace (sync/lock/add/remove/tree/export/version/format)
+# and its command implementations.
+project = ["uv-cli/project", "dep:uv-virtualenv"]
+
+# Enable `uv run`. Implies `project`: `uv run` drives the project lock/sync
+# machinery internally, so it can't stand alone. The reverse holds though —
+# `project` (sync/lock/etc.) can be enabled without `run`.
+run = ["uv-cli/run", "dep:uv-virtualenv", "project"]
 
 # Enable `uv pip` namespace (compile/sync/install/uninstall/freeze/list/show/tree/check).
 pip = ["uv-cli/pip"]
@@ -197,10 +206,10 @@ pip = ["uv-cli/pip"]
 python = ["uv-cli/python"]
 
 # Enable `uv build` subcommand (frontend wheel/sdist build).
-build = ["uv-cli/build"]
+build = ["uv-cli/build", "dep:uv-build-frontend", "dep:uv-build-backend", "uv-workspace/build-backend", "source-build"]
 
 # Enable `uv venv` subcommand.
-venv = ["uv-cli/venv"]
+venv = ["uv-cli/venv", "dep:uv-virtualenv"]
 
 # Enable `uv cache` namespace (clean/prune/dir/size) and the hidden `uv clean` alias.
 cache = ["uv-cli/cache"]

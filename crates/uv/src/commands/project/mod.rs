@@ -60,20 +60,33 @@ use crate::settings::{
     ResolverSettings,
 };
 
+#[cfg(feature = "project")]
 pub(crate) mod add;
 #[cfg(feature = "audit")]
 pub(crate) mod audit;
+#[cfg(any(feature = "project", feature = "run"))]
 pub(crate) mod environment;
+#[cfg(feature = "project")]
 pub(crate) mod export;
+#[cfg(feature = "project")]
 pub(crate) mod format;
+#[cfg(feature = "init")]
 pub(crate) mod init;
+#[cfg(any(feature = "project", feature = "run"))]
 mod install_target;
+#[cfg(feature = "project")]
 pub(crate) mod lock;
+#[cfg(any(feature = "project", feature = "run"))]
 pub(crate) mod lock_target;
+#[cfg(feature = "project")]
 pub(crate) mod remove;
+#[cfg(feature = "run")]
 pub(crate) mod run;
+#[cfg(feature = "project")]
 pub(crate) mod sync;
+#[cfg(feature = "project")]
 pub(crate) mod tree;
+#[cfg(feature = "project")]
 pub(crate) mod version;
 
 /// The source of a missing lockfile error.

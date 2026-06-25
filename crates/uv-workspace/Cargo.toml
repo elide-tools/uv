@@ -16,7 +16,7 @@ doctest = false
 workspace = true
 
 [dependencies]
-uv-build-backend = { workspace = true, features = ["schemars"] }
+uv-build-backend = { workspace = true, features = ["schemars"], optional = true }
 uv-cache-key = { workspace = true }
 uv-configuration = { workspace = true }
 uv-distribution-types = { workspace = true }
@@ -56,3 +56,6 @@ tempfile = { workspace = true }
 
 [features]
 schemars = ["dep:schemars", "uv-pypi-types/schemars", "uv-redacted/schemars"]
+# Pull in uv-build-backend to surface its `[tool.uv.build-backend]` settings
+# schema/metadata. Disable for a wheel-only embedding that doesn't build.
+build-backend = ["dep:uv-build-backend"]

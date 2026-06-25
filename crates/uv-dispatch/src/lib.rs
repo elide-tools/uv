@@ -554,83 +554,83 @@ impl BuildContext for BuildDispatch<'_> {
         }
         #[cfg(feature = "source-build")]
         {
-        let dist_name = dist.map(uv_distribution_types::Name::name);
-        let dist_version = dist
-            .map(uv_distribution_types::DistributionMetadata::version_or_url)
-            .and_then(|version| match version {
-                VersionOrUrlRef::Version(version) => Some(version),
-                VersionOrUrlRef::Url(_) => None,
-            });
+            let dist_name = dist.map(uv_distribution_types::Name::name);
+            let dist_version = dist
+                .map(uv_distribution_types::DistributionMetadata::version_or_url)
+                .and_then(|version| match version {
+                    VersionOrUrlRef::Version(version) => Some(version),
+                    VersionOrUrlRef::Url(_) => None,
+                });
 
-        // Note we can only prevent builds by name for packages with names
-        // unless all builds are disabled.
-        if self
+            // Note we can only prevent builds by name for packages with names
+            // unless all builds are disabled.
+            if self
             .build_options
             .no_build_requirement(dist_name)
             // We always allow editable builds
             && !matches!(build_kind, BuildKind::Editable)
-        {
-            let err = if let Some(dist) = dist {
-                uv_build_frontend::Error::NoSourceDistBuild(dist.name().clone())
-            } else {
-                uv_build_frontend::Error::NoSourceDistBuilds
-            };
-            return Err(err);
-        }
+            {
+                let err = if let Some(dist) = dist {
+                    uv_build_frontend::Error::NoSourceDistBuild(dist.name().clone())
+                } else {
+                    uv_build_frontend::Error::NoSourceDistBuilds
+                };
+                return Err(err);
+            }
 
-        // Push the current distribution onto the build stack, to prevent cyclic dependencies.
-        if let Some(dist) = dist {
-            build_stack.insert(dist.distribution_id());
-        }
+            // Push the current distribution onto the build stack, to prevent cyclic dependencies.
+            if let Some(dist) = dist {
+                build_stack.insert(dist.distribution_id());
+            }
 
-        // Get package-specific config settings if available; otherwise, use global settings.
-        let config_settings = if let Some(name) = dist_name {
-            if let Some(package_settings) = self.config_settings_package.get(name) {
-                package_settings.clone().merge(self.config_settings.clone())
+            // Get package-specific config settings if available; otherwise, use global settings.
+            let config_settings = if let Some(name) = dist_name {
+                if let Some(package_settings) = self.config_settings_package.get(name) {
+                    package_settings.clone().merge(self.config_settings.clone())
+                } else {
+                    self.config_settings.clone()
+                }
             } else {
                 self.config_settings.clone()
-            }
-        } else {
-            self.config_settings.clone()
-        };
+            };
 
-        // Get package-specific environment variables if available.
-        let mut environment_variables = self.build_extra_env_vars.clone();
-        if let Some(name) = dist_name {
-            if let Some(package_vars) = self.extra_build_variables.get(name) {
-                environment_variables.extend(
-                    package_vars
-                        .iter()
-                        .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-                );
+            // Get package-specific environment variables if available.
+            let mut environment_variables = self.build_extra_env_vars.clone();
+            if let Some(name) = dist_name {
+                if let Some(package_vars) = self.extra_build_variables.get(name) {
+                    environment_variables.extend(
+                        package_vars
+                            .iter()
+                            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+                    );
+                }
             }
-        }
 
-        let builder = SourceBuild::setup(
-            source,
-            subdirectory,
-            install_path,
-            dist_name,
-            dist_version,
-            self.interpreter,
-            self,
-            self.source_build_context.clone(),
-            version_id,
-            self.index_locations,
-            sources.clone(),
-            self.workspace_cache(),
-            config_settings,
-            self.build_isolation,
-            self.extra_build_requires,
-            &build_stack,
-            build_kind,
-            environment_variables,
-            build_output,
-            self.client.credentials_cache(),
-        )
-        .boxed_local()
-        .await?;
-        Ok(builder)
+            let builder = SourceBuild::setup(
+                source,
+                subdirectory,
+                install_path,
+                dist_name,
+                dist_version,
+                self.interpreter,
+                self,
+                self.source_build_context.clone(),
+                version_id,
+                self.index_locations,
+                sources.clone(),
+                self.workspace_cache(),
+                config_settings,
+                self.build_isolation,
+                self.extra_build_requires,
+                &build_stack,
+                build_kind,
+                environment_variables,
+                build_output,
+                self.client.credentials_cache(),
+            )
+            .boxed_local()
+            .await?;
+            Ok(builder)
         }
     }
 
@@ -657,60 +657,60 @@ impl BuildContext for BuildDispatch<'_> {
         }
         #[cfg(feature = "source-build")]
         {
-        let source_tree = if let Some(subdir) = subdirectory {
-            source.join(subdir)
-        } else {
-            source.to_path_buf()
-        };
-
-        // Only perform the direct build if the backend is uv in a compatible version.
-        let source_tree_str = source_tree.display().to_string();
-        let identifier = version_id.unwrap_or_else(|| &source_tree_str);
-        if let Err(reason) = check_direct_build(&source_tree, uv_version::version()) {
-            trace!("Requirements for direct build not matched because {reason}");
-            return Ok(None);
-        }
-
-        debug!("Performing direct build for {identifier}");
-
-        let output_dir = output_dir.to_path_buf();
-        let filename = tokio::task::spawn_blocking(move || -> Result<_> {
-            let filename = match build_kind {
-                BuildKind::Wheel => {
-                    let wheel = uv_build_backend::build_wheel(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
-                BuildKind::Sdist => {
-                    let source_dist = uv_build_backend::build_source_dist(
-                        &source_tree,
-                        &output_dir,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::SourceDistFilename(source_dist)
-                }
-                BuildKind::Editable => {
-                    let wheel = uv_build_backend::build_editable(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
+            let source_tree = if let Some(subdir) = subdirectory {
+                source.join(subdir)
+            } else {
+                source.to_path_buf()
             };
-            Ok(filename)
-        })
-        .await??;
 
-        Ok(Some(filename))
+            // Only perform the direct build if the backend is uv in a compatible version.
+            let source_tree_str = source_tree.display().to_string();
+            let identifier = version_id.unwrap_or_else(|| &source_tree_str);
+            if let Err(reason) = check_direct_build(&source_tree, uv_version::version()) {
+                trace!("Requirements for direct build not matched because {reason}");
+                return Ok(None);
+            }
+
+            debug!("Performing direct build for {identifier}");
+
+            let output_dir = output_dir.to_path_buf();
+            let filename = tokio::task::spawn_blocking(move || -> Result<_> {
+                let filename = match build_kind {
+                    BuildKind::Wheel => {
+                        let wheel = uv_build_backend::build_wheel(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                    BuildKind::Sdist => {
+                        let source_dist = uv_build_backend::build_source_dist(
+                            &source_tree,
+                            &output_dir,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::SourceDistFilename(source_dist)
+                    }
+                    BuildKind::Editable => {
+                        let wheel = uv_build_backend::build_editable(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                };
+                Ok(filename)
+            })
+            .await??;
+
+            Ok(Some(filename))
         }
     }
 }

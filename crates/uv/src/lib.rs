@@ -24,15 +24,24 @@ use tracing::{debug, instrument, trace};
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
+#[cfg(feature = "build")]
+use uv_cli::BuildBackendCommand;
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
+use uv_cli::ProjectCommand;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
 #[cfg(any(feature = "pip", feature = "venv"))]
 use uv_cli::compat::CompatArgs;
 #[cfg(feature = "auth")]
 use uv_cli::{AuthCommand, AuthHelperCommand, AuthNamespace};
-use uv_cli::{BuildBackendCommand, Cli, Commands, ProjectCommand, TopLevelArgs};
 #[cfg(feature = "cache")]
 use uv_cli::{CacheCommand, CacheNamespace};
+use uv_cli::{Cli, Commands, TopLevelArgs};
 #[cfg(feature = "pip")]
 use uv_cli::{PipCommand, PipNamespace};
 #[cfg(feature = "python")]
@@ -64,9 +73,18 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
+use crate::commands::ExitStatus;
+#[cfg(any(feature = "project", feature = "run"))]
+use crate::commands::ScriptPath;
 #[cfg(feature = "tool")]
 use crate::commands::ToolRunCommand;
-use crate::commands::{ExitStatus, ParsedRunCommand, RunCommand, ScriptPath};
+#[cfg(feature = "run")]
+use crate::commands::{ParsedRunCommand, RunCommand};
+// When `run` is off, `RunCommand` is never constructed; alias it to an
+// uninhabited type so `Option<RunCommand>` stays nameable in the (run-gated)
+// project dispatch signatures and `project`-only builds still compile.
+#[cfg(not(feature = "run"))]
+type RunCommand = std::convert::Infallible;
 use crate::printer::Printer;
 #[cfg(feature = "publish")]
 use crate::settings::PublishSettings;
@@ -107,6 +125,28 @@ fn python_find_script_path(_command: &Commands) -> Option<&Path> {
     None
 }
 
+/// Resolve a PEP 723 script target from a `uv python <script>` invocation, if any.
+async fn pep723_from_python(command: &Commands) -> anyhow::Result<Option<Pep723Item>> {
+    if let Some(script) = python_find_script_path(command) {
+        match Pep723Script::read(&script).await {
+            Ok(Some(script)) => Ok(Some(Pep723Item::Script(script))),
+            Ok(None) => bail!(
+                "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
+                script.user_display().cyan(),
+                format!("uv init --script {}", script.user_display()).green()
+            ),
+            Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => bail!(
+                "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
+                script.user_display().cyan(),
+                format!("uv init --script {}", script.user_display()).green()
+            ),
+            Err(err) => Err(err.into()),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 /// Returns `true` for commands that operate at the user-level and should ignore local workspace
 /// configuration. Centralizes the `Commands::Tool(_) | Commands::Self_(_)` check so it compiles
 /// correctly regardless of which features are enabled.
@@ -141,6 +181,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
     }
 
     // Parse the external command, if necessary.
+    #[cfg(feature = "run")]
     let parsed_run_command = if let Commands::Project(command) = &*cli.command
         && let ProjectCommand::Run(uv_cli::RunArgs {
             command: Some(ref command),
@@ -203,14 +244,19 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
         } else {
             path
         }
-    } else if let Some(run_command) = &parsed_run_command
-        && early_preview.is_enabled(PreviewFeature::TargetWorkspaceDiscovery)
-        && let Some(dir) = run_command.script_dir()
-    {
+    } else {
         // When running a target with the preview flag enabled, discover the workspace starting
         // from the target's directory rather than the current working directory.
-        Cow::Owned(std::path::absolute(dir)?)
-    } else {
+        #[cfg(feature = "run")]
+        if let Some(run_command) = &parsed_run_command
+            && early_preview.is_enabled(PreviewFeature::TargetWorkspaceDiscovery)
+            && let Some(dir) = run_command.script_dir()
+        {
+            Cow::Owned(std::path::absolute(dir)?)
+        } else {
+            Cow::Borrowed(&*CWD)
+        }
+        #[cfg(not(feature = "run"))]
         Cow::Borrowed(&*CWD)
     };
 
@@ -268,6 +314,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             }) => false,
 
             // Supports `--isolated` as its own argument, so we can't warn either way.
+            #[cfg(feature = "run")]
             Commands::Project(command) if matches!(**command, ProjectCommand::Run(_)) => false,
 
             // `--isolated` moved to `--no-workspace`.
@@ -294,6 +341,12 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 );
                 false
             }
+            #[cfg(any(
+                feature = "project",
+                feature = "run",
+                feature = "init",
+                feature = "audit"
+            ))]
             Commands::Project(_) => {
                 warn_user!(
                     "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
@@ -354,24 +407,46 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
 
     // If the target is a remote script, download it.
     // If the target is a PEP 723 script, parse it.
-    let (run_script, run_command) = if let Some(parsed_run_command) = parsed_run_command {
-        let (script, run_command) = parsed_run_command
-            .resolve(
-                &cli.top_level.global_args,
-                filesystem.as_ref(),
-                &environment,
-            )
-            .await?;
-        (script, Some(run_command))
-    } else {
-        (None, None)
+    #[cfg(any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    ))]
+    let (run_script, run_command): (Option<Pep723Item>, Option<RunCommand>) = {
+        #[cfg(feature = "run")]
+        {
+            if let Some(parsed_run_command) = parsed_run_command {
+                let (script, run_command) = parsed_run_command
+                    .resolve(
+                        &cli.top_level.global_args,
+                        filesystem.as_ref(),
+                        &environment,
+                    )
+                    .await?;
+                (script, Some(run_command))
+            } else {
+                (None, None)
+            }
+        }
+        #[cfg(not(feature = "run"))]
+        {
+            (None, None)
+        }
     };
+    #[cfg(any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    ))]
     let script = if let Some(run_script) = run_script {
         Some(run_script)
     } else if let Commands::Project(command) = &*cli.command {
         match &**command {
             // For `uv add --script` and `uv lock --script`, we'll create a PEP 723 tag if it
             // doesn't already exist.
+            #[cfg(feature = "project")]
             ProjectCommand::Add(uv_cli::AddArgs {
                 script: Some(script),
                 ..
@@ -385,6 +460,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 Err(err) => return Err(err.into()),
             },
             // For the remaining commands, the PEP 723 tag must exist already.
+            #[cfg(feature = "project")]
             ProjectCommand::Remove(uv_cli::RemoveArgs {
                 script: Some(script),
                 ..
@@ -442,28 +518,18 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             },
             _ => None,
         }
-    } else if let Some(script) = python_find_script_path(&cli.command) {
-        match Pep723Script::read(&script).await {
-            Ok(Some(script)) => Some(Pep723Item::Script(script)),
-            Ok(None) => {
-                bail!(
-                    "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
-                    script.user_display().cyan(),
-                    format!("uv init --script {}", script.user_display()).green()
-                )
-            }
-            Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                bail!(
-                    "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
-                    script.user_display().cyan(),
-                    format!("uv init --script {}", script.user_display()).green()
-                )
-            }
-            Err(err) => return Err(err.into()),
-        }
     } else {
-        None
+        pep723_from_python(&cli.command).await?
     };
+    // With the project/run surfaces gated off, a PEP 723 script can still arrive
+    // via `uv python <script>`; otherwise there's no script.
+    #[cfg(not(any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    )))]
+    let script = pep723_from_python(&cli.command).await?;
 
     // If the target is a PEP 723 script, merge the metadata into the filesystem metadata.
     let filesystem = script
@@ -1406,6 +1472,12 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             ))
             .await
         }
+        #[cfg(any(
+            feature = "project",
+            feature = "run",
+            feature = "init",
+            feature = "audit"
+        ))]
         Commands::Project(project) => {
             Box::pin(run_project(
                 project,
@@ -2074,6 +2146,7 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                 commands::list(&project_dir, args.paths, &workspace_cache, printer).await
             }
         },
+        #[cfg(feature = "build")]
         Commands::BuildBackend { command } => spawn_blocking(move || match command {
             BuildBackendCommand::BuildSdist { sdist_directory } => {
                 commands::build_backend::build_sdist(&sdist_directory)
@@ -2161,6 +2234,12 @@ fn required_version_error(
 }
 
 /// Run a [`ProjectCommand`].
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 async fn run_project(
     project_command: Box<ProjectCommand>,
     project_dir: &Path,
@@ -2249,6 +2328,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "run")]
         ProjectCommand::Run(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::RunSettings::resolve(args, filesystem, environment);
@@ -2319,6 +2399,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Sync(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::SyncSettings::resolve(args, filesystem, environment);
@@ -2375,6 +2456,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Lock(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::LockSettings::resolve(args, filesystem, environment);
@@ -2427,6 +2509,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Add(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let mut args = settings::AddSettings::resolve(args, filesystem, environment);
@@ -2561,6 +2644,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Remove(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::RemoveSettings::resolve(args, filesystem, environment);
@@ -2610,6 +2694,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Version(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::VersionSettings::resolve(args, filesystem, environment);
@@ -2656,6 +2741,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Tree(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::TreeSettings::resolve(args, filesystem, environment);
@@ -2701,6 +2787,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Export(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::ExportSettings::resolve(args, filesystem, environment);
@@ -2749,6 +2836,7 @@ async fn run_project(
             .boxed_local()
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Format(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::FormatSettings::resolve(args, filesystem);
