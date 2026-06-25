@@ -157,13 +157,20 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace"]
+default = ["performance", "static", "test-defaults", "install-tracing-subscriber", "python-managed", "publish", "tool", "audit", "init", "self-commands", "pip", "python", "build", "venv", "cache", "auth", "workspace", "source-build"]
 native-auth = ["native-keyring"]
 native-keyring = ["uv-auth/native-keyring"]
 cloud-auth = ["uv-auth/cloud-auth"]
 
 # Static linking (xz2 in particular) for sdist extraction.
 static = ["uv-distribution/static"]
+
+# Build source distributions (PEP 517) during resolution/installation. Disable
+# (e.g. for a wheel-only embedding) to gate uv-dispatch's build paths so sdist
+# installs refuse with a clear error. Phase 2/3 extend this to drop the
+# build-frontend/backend/virtualenv crates once the project/run/build/venv
+# command surfaces are also gated.
+source-build = ["uv-dispatch/source-build"]
 
 # Enable Python installation management (uv python install/uninstall/pin/dir/update-shell).
 # Disable to strip download-from-python-build-standalone functionality while keeping

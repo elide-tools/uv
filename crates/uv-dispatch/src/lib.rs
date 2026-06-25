@@ -12,7 +12,12 @@ use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, instrument, trace};
 
+#[cfg(feature = "source-build")]
 use uv_build_backend::check_direct_build;
+// When `source-build` is off, `uv_build_frontend` resolves to the local stub
+// module below instead of the (absent) crate, so every `uv_build_frontend::…`
+// path and `BuildArena<SourceBuild>` keeps compiling unchanged; only the build
+// *bodies* are gated.
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
@@ -42,6 +47,61 @@ use uv_types::{
     HashStrategy, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
 };
 use uv_workspace::WorkspaceCache;
+
+/// Stand-in for `uv_build_frontend` when source builds are gated off. Provides
+/// the minimal surface `BuildDispatch` names (`SourceBuild`, `SourceBuildContext`,
+/// `Error`) so the rest of this file compiles unchanged; every operation refuses
+/// with a clear error since no build backend is linked in.
+#[cfg(not(feature = "source-build"))]
+#[allow(unreachable_pub)]
+mod uv_build_frontend {
+    use std::path::{Path, PathBuf};
+
+    use uv_distribution_types::IsBuildBackendError;
+    use uv_types::{AnyErrorBuild, SourceBuildTrait};
+
+    #[derive(Debug)]
+    pub enum Error {
+        NoSourceDistBuilds,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("source distribution builds are disabled in this build of uv")
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    impl IsBuildBackendError for Error {
+        fn is_build_backend_error(&self) -> bool {
+            false
+        }
+    }
+
+    /// A source builder that never builds.
+    #[derive(Default)]
+    pub struct SourceBuild;
+
+    impl SourceBuildTrait for SourceBuild {
+        async fn metadata(&mut self) -> Result<Option<PathBuf>, AnyErrorBuild> {
+            Err(Error::NoSourceDistBuilds.into())
+        }
+
+        async fn wheel<'a>(&'a self, _wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
+            Err(Error::NoSourceDistBuilds.into())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct SourceBuildContext;
+
+    impl SourceBuildContext {
+        pub fn new<T>(_semaphore: T) -> Self {
+            Self
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum BuildDispatchError {
@@ -388,6 +448,8 @@ impl BuildContext for BuildDispatch<'_> {
         }
 
         // Verify that none of the missing distributions are already in the build stack.
+        // Only source builds can introduce build-dependency cycles; skip when gated off.
+        #[cfg(feature = "source-build")]
         for dist in &remote {
             let id = dist.distribution_id();
             if build_stack.contains(&id) {
@@ -475,6 +537,23 @@ impl BuildContext for BuildDispatch<'_> {
         build_output: BuildOutput,
         mut build_stack: BuildStack,
     ) -> Result<SourceBuild, uv_build_frontend::Error> {
+        #[cfg(not(feature = "source-build"))]
+        {
+            let _ = (
+                &source,
+                &subdirectory,
+                &install_path,
+                &version_id,
+                &dist,
+                &sources,
+                &build_kind,
+                &build_output,
+                &build_stack,
+            );
+            return Err(uv_build_frontend::Error::NoSourceDistBuilds);
+        }
+        #[cfg(feature = "source-build")]
+        {
         let dist_name = dist.map(uv_distribution_types::Name::name);
         let dist_version = dist
             .map(uv_distribution_types::DistributionMetadata::version_or_url)
@@ -552,6 +631,7 @@ impl BuildContext for BuildDispatch<'_> {
         .boxed_local()
         .await?;
         Ok(builder)
+        }
     }
 
     async fn direct_build<'data>(
@@ -563,6 +643,20 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
+        #[cfg(not(feature = "source-build"))]
+        {
+            let _ = (
+                &source,
+                &subdirectory,
+                &output_dir,
+                &sources,
+                &build_kind,
+                &version_id,
+            );
+            return Ok(None);
+        }
+        #[cfg(feature = "source-build")]
+        {
         let source_tree = if let Some(subdir) = subdirectory {
             source.join(subdir)
         } else {
@@ -617,6 +711,7 @@ impl BuildContext for BuildDispatch<'_> {
         .await??;
 
         Ok(Some(filename))
+        }
     }
 }
 
