@@ -471,8 +471,18 @@ def get_operating_system_and_architecture():
             elif architecture == "aarch64":
                 architecture = "armv8l"
 
-        musl_version = _get_musl_version(sys.executable)
-        glibc_version = _get_glibc_version()
+        if sys.implementation.name == "graalpy" and architecture == "x86_64":
+            # Elide ships its embedded GraalPy as a fully-static musl binary on
+            # linux amd64: there's no PT_INTERP for `_get_musl_version` to read
+            # and the static image can't run the glibc ctypes probe (no dynamic
+            # loader, so `import ctypes`/`CDLL(None)` can't bootstrap `dlopen`).
+            # The libc is musl here, so report musllinux directly and skip both
+            # probes. arm64 ships glibc, so it falls through to normal detection.
+            musl_version = (1, 2)
+            glibc_version = (-1, -1)
+        else:
+            musl_version = _get_musl_version(sys.executable)
+            glibc_version = _get_glibc_version()
 
         if musl_version:
             operating_system = {
