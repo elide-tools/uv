@@ -1141,15 +1141,17 @@ async fn create_pep517_build_environment(
     Ok(())
 }
 
-/// A compiler path used to force `CC`/`CXX`/`FC` invocations in [`PythonRunner::run_script`] to
-/// fail. See the comment at that call site for why.
+/// A path used in [`PythonRunner::run_script`] to make C-compiler discovery fail: as `CC`/`CXX`/
+/// `FC` directly on POSIX and for meson (which honors those on every OS), and as `ProgramFiles`/
+/// `ProgramFiles(x86)` to break MSVC's `vswhere.exe` lookup on Windows. See the comment at that
+/// call site for why, and for the known Windows residual gap.
 ///
 /// Deliberately an *absolute* path nested under `/dev/null` rather than a bare name: a bare name
 /// is resolved via `PATH` search, so it would silently stop working if the user happened to have
 /// an executable with this exact name anywhere on `PATH`. `/dev/null` is a character device, not
 /// a directory, so resolving any path nested under it fails with `ENOTDIR` unconditionally — no
 /// file can ever exist "inside" it, on any POSIX system, regardless of `PATH` or filesystem
-/// contents.
+/// contents. On Windows the same string just normalizes to a harmless nonexistent relative path.
 const ELIDE_NO_C_COMPILER: &str = "/dev/null/elide-c-extensions-unsupported";
 
 /// A runner that manages the execution of external python processes with a
@@ -1246,6 +1248,22 @@ impl PythonRunner {
             .env("CC", ELIDE_NO_C_COMPILER)
             .env("CXX", ELIDE_NO_C_COMPILER)
             .env("FC", ELIDE_NO_C_COMPILER)
+            // Windows: distutils'/setuptools' default (MSVC) compiler class never reads
+            // CC/CXX at all — it finds `cl.exe` via the registry (VS2015 and earlier) or by
+            // shelling out to `vswhere.exe` (VS2017+), whose own path is built directly from
+            // `ProgramFiles(x86)`. Breaking that lookup fails MSVC discovery itself, before
+            // any compiler subprocess would ever spawn, on any machine with only a modern
+            // (VS2017+) install — the common case today. Meson (meson-python) is already
+            // covered by CC/CXX/FC above, since it honors them on every OS including Windows.
+            //
+            // Known residual gap, not worth chasing given this is a workaround and not a
+            // sandbox: a legacy VS2015-or-earlier install is registry-based and never calls
+            // `vswhere.exe`, so no environment variable reaches that lookup path. Setting
+            // `DISTUTILS_USE_SDK` is deliberately NOT used to try to close that gap — it
+            // *skips* the vcvarsall/registry probe entirely and trusts the ambient
+            // environment instead, which would make failure less reliable, not more.
+            .env("ProgramFiles(x86)", ELIDE_NO_C_COMPILER)
+            .env("ProgramFiles", ELIDE_NO_C_COMPILER)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
