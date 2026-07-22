@@ -88,6 +88,7 @@ And the following derived images are available:
     - `ghcr.io/astral-sh/uv:python3.11-trixie-slim`
     - `ghcr.io/astral-sh/uv:python3.10-trixie-slim`
     - `ghcr.io/astral-sh/uv:python3.9-trixie-slim`
+
 <!-- prettier-ignore-end -->
 
 As with the distroless image, each derived image is published with uv version tags as
