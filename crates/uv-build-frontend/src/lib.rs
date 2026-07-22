@@ -1141,6 +1141,17 @@ async fn create_pep517_build_environment(
     Ok(())
 }
 
+/// A compiler path used to force `CC`/`CXX`/`FC` invocations in [`PythonRunner::run_script`] to
+/// fail. See the comment at that call site for why.
+///
+/// Deliberately an *absolute* path nested under `/dev/null` rather than a bare name: a bare name
+/// is resolved via `PATH` search, so it would silently stop working if the user happened to have
+/// an executable with this exact name anywhere on `PATH`. `/dev/null` is a character device, not
+/// a directory, so resolving any path nested under it fails with `ENOTDIR` unconditionally — no
+/// file can ever exist "inside" it, on any POSIX system, regardless of `PATH` or filesystem
+/// contents.
+const ELIDE_NO_C_COMPILER: &str = "/dev/null/elide-c-extensions-unsupported";
+
 /// A runner that manages the execution of external python processes with a
 /// concurrency limit.
 #[derive(Debug)]
@@ -1216,6 +1227,25 @@ impl PythonRunner {
             .env_remove(EnvVars::UV_API_KEY)
             .env_remove(EnvVars::PYX_AUTH_TOKEN)
             .env_remove(EnvVars::UV_AUTH_TOKEN)
+            // --- Elide fork workaround --------------------------------------------------
+            // Elide has no story for building real C extensions yet, but plenty of pure-
+            // Python packages (e.g. MarkupSafe) ship an *optional* compiled speedup and
+            // fall back to a pure-Python implementation when the C extension fails to
+            // build. Forcing `CC`/`CXX`/`FC` to a name that can never resolve makes that
+            // fallback fire deterministically (distutils/setuptools/meson all wrap the
+            // resulting "compiler not found" `OSError` into a build failure the backend's
+            // own fallback logic already catches) instead of leaving it to chance based on
+            // whatever toolchain happens to be on `PATH`.
+            //
+            // This is *not* a sandbox and does not close the general RCE surface of running
+            // arbitrary PEP 517 build-backend code (`setup.py`'s top-level code, and
+            // anything before the compiler is actually invoked, still executes with full
+            // process access). It only guarantees that the "try to compile, fall back to
+            // pure Python" path can't accidentally succeed at compiling. Revisit once Elide
+            // supports real C extension builds.
+            .env("CC", ELIDE_NO_C_COMPILER)
+            .env("CXX", ELIDE_NO_C_COMPILER)
+            .env("FC", ELIDE_NO_C_COMPILER)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
