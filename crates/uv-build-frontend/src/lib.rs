@@ -1256,11 +1256,25 @@ impl PythonRunner {
             // (VS2017+) install — the common case today. Meson (meson-python) is already
             // covered by CC/CXX/FC above, since it honors them on every OS including Windows.
             //
-            // Known residual gap, not worth chasing given this is a workaround and not a
-            // sandbox: a legacy VS2015-or-earlier install is registry-based and never calls
-            // `vswhere.exe`, so no environment variable reaches that lookup path. Setting
-            // `DISTUTILS_USE_SDK` is deliberately NOT used to try to close that gap — it
-            // *skips* the vcvarsall/registry probe entirely and trusts the ambient
+            // Known, deliberately accepted residual gap: a legacy VS2015-or-earlier install
+            // is registry-based and never calls `vswhere.exe`, so no environment variable
+            // reaches that lookup path. VS2015 went EOL in October 2018, so a machine with
+            // *only* that (nothing VS2017+) is an accepted, shrinking edge case — not worth
+            // chasing given this is a workaround and not a sandbox.
+            //
+            // Considered and rejected: monkeypatching the discovery function itself (e.g.
+            // `_get_vc_env`/`_find_vcvarsall` in `distutils`/`setuptools._distutils`, via a
+            // `PYTHONPATH`-injected `sitecustomize.py`) would cover VS2015 too, since that's
+            // one function regardless of VS version. Confirmed empirically that these names
+            // are stable all the way back through pre-reorg setuptools (65.5.0's flat
+            // `_msvccompiler.py` has the identical names, just a different module path) —
+            // but it still means reaching into private, underscore-prefixed internals that
+            // could silently relocate again in a future setuptools release, for an already-
+            // EOL edge case. Not worth the maintenance burden; revisit if that calculus
+            // changes.
+            //
+            // Setting `DISTUTILS_USE_SDK` is deliberately NOT used to try to close that gap
+            // — it *skips* the vcvarsall/registry probe entirely and trusts the ambient
             // environment instead, which would make failure less reliable, not more.
             .env("ProgramFiles(x86)", ELIDE_NO_C_COMPILER)
             .env("ProgramFiles", ELIDE_NO_C_COMPILER)
