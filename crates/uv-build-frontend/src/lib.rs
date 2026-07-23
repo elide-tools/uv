@@ -1248,13 +1248,15 @@ impl PythonRunner {
             .env("CC", ELIDE_NO_C_COMPILER)
             .env("CXX", ELIDE_NO_C_COMPILER)
             .env("FC", ELIDE_NO_C_COMPILER)
-            // Windows: distutils'/setuptools' default (MSVC) compiler class never reads
-            // CC/CXX at all — it finds `cl.exe` via the registry (VS2015 and earlier) or by
-            // shelling out to `vswhere.exe` (VS2017+), whose own path is built directly from
-            // `ProgramFiles(x86)`. Breaking that lookup fails MSVC discovery itself, before
-            // any compiler subprocess would ever spawn, on any machine with only a modern
-            // (VS2017+) install — the common case today. Meson (meson-python) is already
-            // covered by CC/CXX/FC above, since it honors them on every OS including Windows.
+            // These two are set unconditionally on every OS (harmless no-ops off Windows) for
+            // the same reason as CC/CXX/FC above: on Windows, the default (MSVC) compiler class
+            // in distutils/setuptools never reads CC/CXX at all — it finds `cl.exe` via the
+            // registry (VS2015 and earlier) or by shelling out to `vswhere.exe` (VS2017+), whose
+            // own path is built directly from `ProgramFiles(x86)`. Breaking that lookup fails
+            // MSVC discovery itself, before any compiler subprocess would ever spawn, on any
+            // machine with only a modern (VS2017+) install — the common case today. Meson
+            // (meson-python) is already covered by CC/CXX/FC above, since it honors them on
+            // every OS including Windows.
             //
             // Known, deliberately accepted residual gap: a legacy VS2015-or-earlier install
             // is registry-based and never calls `vswhere.exe`, so no environment variable
