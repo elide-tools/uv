@@ -1175,6 +1175,19 @@ async fn create_pep517_build_environment(
     Ok(())
 }
 
+/// A path used in [`PythonRunner::run_script`] to make C-compiler discovery fail: as `CC`/`CXX`/
+/// `FC` directly on POSIX and for meson (which honors those on every OS), and as `ProgramFiles`/
+/// `ProgramFiles(x86)` to break MSVC's `vswhere.exe` lookup on Windows. See the comment at that
+/// call site for why, and for the known Windows residual gap.
+///
+/// Deliberately an *absolute* path nested under `/dev/null` rather than a bare name: a bare name
+/// is resolved via `PATH` search, so it would silently stop working if the user happened to have
+/// an executable with this exact name anywhere on `PATH`. `/dev/null` is a character device, not
+/// a directory, so resolving any path nested under it fails with `ENOTDIR` unconditionally — no
+/// file can ever exist "inside" it, on any POSIX system, regardless of `PATH` or filesystem
+/// contents. On Windows the same string just normalizes to a harmless nonexistent relative path.
+const ELIDE_NO_C_COMPILER: &str = "/dev/null/elide-c-extensions-unsupported";
+
 /// A runner that manages the execution of external python processes with a
 /// concurrency limit.
 #[derive(Debug)]
@@ -1251,6 +1264,57 @@ impl PythonRunner {
             .env_remove(EnvVars::UV_API_KEY)
             .env_remove(EnvVars::PYX_AUTH_TOKEN)
             .env_remove(EnvVars::UV_AUTH_TOKEN)
+            // --- Elide fork workaround --------------------------------------------------
+            // Elide has no story for building real C extensions yet, but plenty of pure-
+            // Python packages (e.g. MarkupSafe) ship an *optional* compiled speedup and
+            // fall back to a pure-Python implementation when the C extension fails to
+            // build. Forcing `CC`/`CXX`/`FC` to a name that can never resolve makes that
+            // fallback fire deterministically (distutils/setuptools/meson all wrap the
+            // resulting "compiler not found" `OSError` into a build failure the backend's
+            // own fallback logic already catches) instead of leaving it to chance based on
+            // whatever toolchain happens to be on `PATH`.
+            //
+            // This is *not* a sandbox and does not close the general RCE surface of running
+            // arbitrary PEP 517 build-backend code (`setup.py`'s top-level code, and
+            // anything before the compiler is actually invoked, still executes with full
+            // process access). It only guarantees that the "try to compile, fall back to
+            // pure Python" path can't accidentally succeed at compiling. Revisit once Elide
+            // supports real C extension builds.
+            .env("CC", ELIDE_NO_C_COMPILER)
+            .env("CXX", ELIDE_NO_C_COMPILER)
+            .env("FC", ELIDE_NO_C_COMPILER)
+            // These two are set unconditionally on every OS (harmless no-ops off Windows) for
+            // the same reason as CC/CXX/FC above: on Windows, the default (MSVC) compiler class
+            // in distutils/setuptools never reads CC/CXX at all — it finds `cl.exe` via the
+            // registry (VS2015 and earlier) or by shelling out to `vswhere.exe` (VS2017+), whose
+            // own path is built directly from `ProgramFiles(x86)`. Breaking that lookup fails
+            // MSVC discovery itself, before any compiler subprocess would ever spawn, on any
+            // machine with only a modern (VS2017+) install — the common case today. Meson
+            // (meson-python) is already covered by CC/CXX/FC above, since it honors them on
+            // every OS including Windows.
+            //
+            // Known, deliberately accepted residual gap: a legacy VS2015-or-earlier install
+            // is registry-based and never calls `vswhere.exe`, so no environment variable
+            // reaches that lookup path. VS2015 went EOL in October 2018, so a machine with
+            // *only* that (nothing VS2017+) is an accepted, shrinking edge case — not worth
+            // chasing given this is a workaround and not a sandbox.
+            //
+            // Considered and rejected: monkeypatching the discovery function itself (e.g.
+            // `_get_vc_env`/`_find_vcvarsall` in `distutils`/`setuptools._distutils`, via a
+            // `PYTHONPATH`-injected `sitecustomize.py`) would cover VS2015 too, since that's
+            // one function regardless of VS version. Confirmed empirically that these names
+            // are stable all the way back through pre-reorg setuptools (65.5.0's flat
+            // `_msvccompiler.py` has the identical names, just a different module path) —
+            // but it still means reaching into private, underscore-prefixed internals that
+            // could silently relocate again in a future setuptools release, for an already-
+            // EOL edge case. Not worth the maintenance burden; revisit if that calculus
+            // changes.
+            //
+            // Setting `DISTUTILS_USE_SDK` is deliberately NOT used to try to close that gap
+            // — it *skips* the vcvarsall/registry probe entirely and trusts the ambient
+            // environment instead, which would make failure less reliable, not more.
+            .env("ProgramFiles(x86)", ELIDE_NO_C_COMPILER)
+            .env("ProgramFiles", ELIDE_NO_C_COMPILER)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()

@@ -1,7 +1,9 @@
 //! Configure rayon and determine thread stack sizes.
 
+use std::error::Error;
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing::debug;
 use uv_static::EnvVars;
 
 /// The default minimum stack size for uv threads.
@@ -63,10 +65,20 @@ pub static RAYON_PARALLELISM: AtomicUsize = AtomicUsize::new(0);
 pub fn initialize_rayon_once() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        rayon::ThreadPoolBuilder::new()
+        if let Err(err) = rayon::ThreadPoolBuilder::new()
             .num_threads(RAYON_PARALLELISM.load(Ordering::Relaxed))
             .stack_size(min_stack_size())
             .build_global()
-            .expect("failed to initialize global rayon pool");
+        {
+            // The Rayon global pool is process-wide. When uv is embedded in
+            // another runtime, the host or an earlier embedded resolver may
+            // have already initialized it. Rayon does not expose the error
+            // kind, but build_global only returns this no-source error or an
+            // underlying IO error.
+            if err.source().is_some() {
+                panic!("failed to initialize global rayon pool: {err}");
+            }
+            debug!("using existing global rayon pool: {err}");
+        }
     });
 }

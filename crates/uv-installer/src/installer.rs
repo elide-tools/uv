@@ -201,6 +201,9 @@ fn install(
     if let Err(err) = state.warn_package_conflicts() {
         warn!("Checking for conflicts between packages failed: {err}");
     }
+    if let Some(reporter) = reporter.as_ref() {
+        reporter.on_install_complete();
+    }
 
     Ok(wheels)
 }

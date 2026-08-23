@@ -1,18 +1,28 @@
+#[cfg(feature = "install-tracing-subscriber")]
 use std::str::FromStr;
 
+#[cfg(feature = "install-tracing-subscriber")]
 use anyhow::Context;
 #[cfg(feature = "tracing-durations-export")]
 use tracing_durations_export::{
     DurationsLayer, DurationsLayerBuilder, DurationsLayerDropGuard, plot::PlotConfig,
 };
+#[cfg(feature = "install-tracing-subscriber")]
+use tracing_subscriber::EnvFilter;
+#[cfg(feature = "install-tracing-subscriber")]
 use tracing_subscriber::filter::Directive;
+#[cfg(feature = "install-tracing-subscriber")]
 use tracing_subscriber::layer::SubscriberExt;
+#[cfg(feature = "install-tracing-subscriber")]
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::{Layer, Registry};
+#[cfg(feature = "install-tracing-subscriber")]
 use tracing_tree::HierarchicalLayer;
+#[cfg(feature = "install-tracing-subscriber")]
 use tracing_tree::time::Uptime;
 
 use uv_cli::ColorChoice;
+#[cfg(feature = "install-tracing-subscriber")]
 use uv_logging::{UvFormat, uv_fields};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +40,23 @@ pub(crate) enum Level {
 /// The [`Level`] is used to dictate the default filters (which can be overridden by the `RUST_LOG`
 /// environment variable) along with the formatting of the output. For example, [`Level::Verbose`]
 /// includes targets and timestamps, along with all `uv=debug` messages by default.
+/// No-op stub when the `install-tracing-subscriber` feature is disabled.
+///
+/// Tracing events continue to emit through the macros; the embedder is
+/// expected to install its own global `tracing_subscriber` that receives
+/// them. This form is used when uv runs alongside other tracing-emitting
+/// crates (orogene, Elide) that must share a single subscriber.
+#[cfg(not(feature = "install-tracing-subscriber"))]
+pub(crate) fn setup_logging(
+    _level: Level,
+    _durations_layer: Option<impl Layer<Registry> + Send + Sync>,
+    _color: ColorChoice,
+    _detailed_logging: bool,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(feature = "install-tracing-subscriber")]
 pub(crate) fn setup_logging(
     level: Level,
     durations_layer: Option<impl Layer<Registry> + Send + Sync>,

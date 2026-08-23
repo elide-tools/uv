@@ -68,22 +68,39 @@ use crate::settings::{
     ResolverSettings,
 };
 
+#[cfg(feature = "project")]
 pub(crate) mod add;
+#[cfg(feature = "audit")]
 pub(crate) mod audit;
+#[cfg(feature = "project")]
 pub(crate) mod check;
+#[cfg(any(feature = "project", feature = "run"))]
 pub(crate) mod environment;
+#[cfg(feature = "project")]
 pub(crate) mod export;
+#[cfg(feature = "project")]
 pub(crate) mod format;
+#[cfg(feature = "init")]
 pub(crate) mod init;
+#[cfg(any(feature = "project", feature = "run"))]
 pub(crate) mod install_target;
+#[cfg(feature = "project")]
 pub(crate) mod lock;
+#[cfg(any(feature = "project", feature = "run"))]
 pub(crate) mod lock_target;
+#[cfg(feature = "project")]
 pub(crate) mod remove;
+#[cfg(feature = "run")]
 pub(crate) mod run;
+#[cfg(feature = "project")]
 pub(crate) mod sync;
+#[cfg(feature = "project")]
 mod toolchain;
+#[cfg(feature = "project")]
 pub(crate) mod tree;
+#[cfg(feature = "project")]
 pub(crate) mod upgrade;
+#[cfg(feature = "project")]
 pub(crate) mod version;
 
 /// The source of a missing lockfile error.
@@ -339,6 +356,7 @@ pub(crate) enum ProjectError {
     #[error(transparent)]
     Interpreter(#[from] uv_python::InterpreterError),
 
+    #[cfg(feature = "tool")]
     #[error(transparent)]
     Tool(#[from] uv_tool::Error),
 

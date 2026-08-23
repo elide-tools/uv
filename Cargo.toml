@@ -47,7 +47,7 @@ uv-git-types = { version = "0.0.72", path = "crates/uv-git-types" }
 uv-globfilter = { version = "0.0.72", path = "crates/uv-globfilter" }
 uv-install-wheel = { version = "0.0.72", path = "crates/uv-install-wheel", default-features = false }
 uv-installer = { version = "0.0.72", path = "crates/uv-installer" }
-uv-keyring = { version = "0.0.72", path = "crates/uv-keyring" }
+uv-keyring = { version = "0.0.72", path = "crates/uv-keyring", default-features = false }
 uv-logging = { version = "0.0.72", path = "crates/uv-logging" }
 uv-macros = { version = "0.0.72", path = "crates/uv-macros" }
 uv-metadata = { version = "0.0.72", path = "crates/uv-metadata" }

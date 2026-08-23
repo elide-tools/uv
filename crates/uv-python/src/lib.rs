@@ -185,6 +185,7 @@ impl uv_errors::Hint for Error {
 }
 
 impl Error {
+    #[cfg_attr(not(feature = "python-managed"), allow(dead_code))]
     fn with_hint(self, hint: MissingPythonHint) -> Self {
         match self {
             Self::MissingPython(err, _) => Self::MissingPython(err, Some(Box::new(hint))),

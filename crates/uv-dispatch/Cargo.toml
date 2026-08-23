@@ -16,9 +16,15 @@ test = false
 [lints]
 workspace = true
 
+[features]
+# Build source distributions (PEP 517) during resolution/installation. Disable
+# to drop the build-frontend/backend (and transitively virtualenv) and have
+# `setup_build`/`direct_build` refuse with a clear error — wheel-only installs.
+source-build = ["dep:uv-build-backend", "dep:uv-build-frontend"]
+
 [dependencies]
-uv-build-backend = { workspace = true }
-uv-build-frontend = { workspace = true }
+uv-build-backend = { workspace = true, optional = true }
+uv-build-frontend = { workspace = true, optional = true }
 uv-cache = { workspace = true }
 uv-client = { workspace = true }
 uv-configuration = { workspace = true }

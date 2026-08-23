@@ -7,13 +7,21 @@ use std::future::{self, Future};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+#[cfg(feature = "source-build")]
 use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
-use tracing::{debug, instrument, trace};
+#[cfg(feature = "source-build")]
+use tracing::trace;
+use tracing::{debug, instrument};
 
+#[cfg(feature = "source-build")]
 use uv_build_backend::check_direct_build;
+// When `source-build` is off, `uv_build_frontend` resolves to the local stub
+// module below instead of the (absent) crate, so every `uv_build_frontend::…`
+// path and `BuildArena<SourceBuild>` keeps compiling unchanged; only the build
+// *bodies* are gated.
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
@@ -25,9 +33,11 @@ use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
-    Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
-    PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
+    IndexCapabilities, IndexLocations, IsBuildBackendError, Name, PackageConfigSettings,
+    Requirement, Resolution, SourceDist,
 };
+#[cfg(feature = "source-build")]
+use uv_distribution_types::{Identifier, VersionOrUrlRef};
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
 use uv_preview::Preview;
@@ -43,6 +53,63 @@ use uv_types::{
     HashStrategy, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
 };
 use uv_workspace::WorkspaceCache;
+
+/// Stand-in for `uv_build_frontend` when source builds are gated off. Provides
+/// the minimal surface `BuildDispatch` names (`SourceBuild`, `SourceBuildContext`,
+/// `Error`) so the rest of this file compiles unchanged; every operation refuses
+/// with a clear error since no build backend is linked in.
+#[cfg(not(feature = "source-build"))]
+#[allow(unreachable_pub)]
+mod uv_build_frontend {
+    use std::path::{Path, PathBuf};
+
+    use uv_distribution_types::IsBuildBackendError;
+    use uv_types::{AnyErrorBuild, SourceBuildTrait};
+
+    #[derive(Debug)]
+    pub enum Error {
+        NoSourceDistBuilds,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("source distribution builds are disabled in this build of uv")
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    impl uv_errors::Hint for Error {}
+
+    impl IsBuildBackendError for Error {
+        fn is_build_backend_error(&self) -> bool {
+            false
+        }
+    }
+
+    /// A source builder that never builds.
+    #[derive(Default)]
+    pub struct SourceBuild;
+
+    impl SourceBuildTrait for SourceBuild {
+        async fn metadata(&mut self) -> Result<Option<PathBuf>, AnyErrorBuild> {
+            Err(Error::NoSourceDistBuilds.into())
+        }
+
+        async fn wheel<'a>(&'a self, _wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
+            Err(Error::NoSourceDistBuilds.into())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct SourceBuildContext;
+
+    impl SourceBuildContext {
+        pub fn new<T>(_semaphore: T) -> Self {
+            Self
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum BuildDispatchError {
@@ -126,6 +193,7 @@ pub struct BuildDispatch<'a> {
     config_settings_package: &'a PackageConfigSettings,
     hasher: &'a HashStrategy,
     exclude_newer: ExcludeNewer,
+    #[cfg_attr(not(feature = "source-build"), allow(dead_code))]
     source_build_context: SourceBuildContext,
     build_extra_env_vars: FxHashMap<OsString, OsString>,
     sources: NoSources,
@@ -414,6 +482,8 @@ impl BuildContext for BuildDispatch<'_> {
         }
 
         // Verify that none of the missing distributions are already in the build stack.
+        // Only source builds can introduce build-dependency cycles; skip when gated off.
+        #[cfg(feature = "source-build")]
         for dist in &remote {
             let id = dist.distribution_id();
             if build_stack.contains(&id) {
@@ -500,86 +570,105 @@ impl BuildContext for BuildDispatch<'_> {
         sources: &'data NoSources,
         build_kind: BuildKind,
         build_output: BuildOutput,
-        mut build_stack: BuildStack,
+        #[cfg_attr(not(feature = "source-build"), allow(unused_mut))] mut build_stack: BuildStack,
     ) -> Result<SourceBuild, uv_build_frontend::Error> {
-        let dist_name = dist.map(uv_distribution_types::Name::name);
-        let dist_version = dist
-            .map(uv_distribution_types::DistributionMetadata::version_or_url)
-            .and_then(|version| match version {
-                VersionOrUrlRef::Version(version) => Some(version),
-                VersionOrUrlRef::Url(_) => None,
-            });
+        #[cfg(not(feature = "source-build"))]
+        {
+            let _ = (
+                &source,
+                &subdirectory,
+                &install_path,
+                &stop_discovery_at,
+                &version_id,
+                &dist,
+                &sources,
+                &build_kind,
+                &build_output,
+                &build_stack,
+            );
+            return Err(uv_build_frontend::Error::NoSourceDistBuilds);
+        }
+        #[cfg(feature = "source-build")]
+        {
+            let dist_name = dist.map(uv_distribution_types::Name::name);
+            let dist_version = dist
+                .map(uv_distribution_types::DistributionMetadata::version_or_url)
+                .and_then(|version| match version {
+                    VersionOrUrlRef::Version(version) => Some(version),
+                    VersionOrUrlRef::Url(_) => None,
+                });
 
-        // Note we can only prevent builds by name for packages with names
-        // unless all builds are disabled.
-        if self
+            // Note we can only prevent builds by name for packages with names
+            // unless all builds are disabled.
+            if self
             .build_options
             .no_build_requirement(dist_name)
             // We always allow editable builds
             && !matches!(build_kind, BuildKind::Editable)
-        {
-            let err = if let Some(dist) = dist {
-                uv_build_frontend::Error::NoSourceDistBuild(dist.name().clone())
-            } else {
-                uv_build_frontend::Error::NoSourceDistBuilds
-            };
-            return Err(err);
-        }
+            {
+                let err = if let Some(dist) = dist {
+                    uv_build_frontend::Error::NoSourceDistBuild(dist.name().clone())
+                } else {
+                    uv_build_frontend::Error::NoSourceDistBuilds
+                };
+                return Err(err);
+            }
 
-        // Push the current distribution onto the build stack, to prevent cyclic dependencies.
-        if let Some(dist) = dist {
-            build_stack.insert(dist.distribution_id());
-        }
+            // Push the current distribution onto the build stack, to prevent cyclic dependencies.
+            if let Some(dist) = dist {
+                build_stack.insert(dist.distribution_id());
+            }
 
-        // Get package-specific config settings if available; otherwise, use global settings.
-        let config_settings = if let Some(name) = dist_name {
-            if let Some(package_settings) = self.config_settings_package.get(name) {
-                package_settings.clone().merge(self.config_settings.clone())
+            // Get package-specific config settings if available; otherwise, use global settings.
+            let config_settings = if let Some(name) = dist_name {
+                if let Some(package_settings) = self.config_settings_package.get(name) {
+                    package_settings.clone().merge(self.config_settings.clone())
+                } else {
+                    self.config_settings.clone()
+                }
             } else {
                 self.config_settings.clone()
-            }
-        } else {
-            self.config_settings.clone()
-        };
+            };
 
-        // Get package-specific environment variables if available.
-        let mut environment_variables = self.build_extra_env_vars.clone();
-        if let Some(name) = dist_name {
-            if let Some(package_vars) = self.extra_build_variables.get(name) {
-                environment_variables.extend(
-                    package_vars
-                        .iter()
-                        .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-                );
+            // Get package-specific environment variables if available.
+            let mut environment_variables = self.build_extra_env_vars.clone();
+            if let Some(name) = dist_name {
+                if let Some(package_vars) = self.extra_build_variables.get(name) {
+                    environment_variables.extend(
+                        package_vars
+                            .iter()
+                            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+                    );
+                }
             }
+
+            let builder = SourceBuild::setup(
+                source,
+                subdirectory,
+                install_path,
+                stop_discovery_at,
+                dist_name,
+                dist_version,
+                self.interpreter,
+                self,
+                self.source_build_context.clone(),
+                version_id,
+                self.index_locations,
+                sources.clone(),
+                self.workspace_cache(),
+                config_settings,
+                self.build_isolation,
+                self.extra_build_requires,
+                &build_stack,
+                build_kind,
+                environment_variables,
+                build_output,
+                self.client.credentials_cache(),
+            )
+            .boxed_local()
+            .await?;
+            Ok(builder)
         }
-
-        let builder = SourceBuild::setup(
-            source,
-            subdirectory,
-            install_path,
-            stop_discovery_at,
-            dist_name,
-            dist_version,
-            self.interpreter,
-            self,
-            self.source_build_context.clone(),
-            version_id,
-            self.index_locations,
-            sources.clone(),
-            self.workspace_cache(),
-            config_settings,
-            self.build_isolation,
-            self.extra_build_requires,
-            &build_stack,
-            build_kind,
-            environment_variables,
-            build_output,
-            self.client.credentials_cache(),
-        )
-        .boxed_local()
-        .await?;
-        Ok(builder)
     }
 
     async fn direct_build<'data>(
@@ -591,60 +680,75 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
-        let source_tree = if let Some(subdir) = subdirectory {
-            source.join(subdir)
-        } else {
-            source.to_path_buf()
-        };
-
-        // Only perform the direct build if the backend is uv in a compatible version.
-        let source_tree_str = source_tree.display().to_string();
-        let identifier = version_id.unwrap_or_else(|| &source_tree_str);
-        if let Err(reason) = check_direct_build(&source_tree, uv_version::version()) {
-            trace!("Requirements for direct build not matched because {reason}");
+        #[cfg(not(feature = "source-build"))]
+        {
+            let _ = (
+                &source,
+                &subdirectory,
+                &output_dir,
+                &sources,
+                &build_kind,
+                &version_id,
+            );
             return Ok(None);
         }
-
-        debug!("Performing direct build for {identifier}");
-
-        let output_dir = output_dir.to_path_buf();
-        let filename = tokio::task::spawn_blocking(move || -> Result<_> {
-            let filename = match build_kind {
-                BuildKind::Wheel => {
-                    let wheel = uv_build_backend::build_wheel(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
-                BuildKind::Sdist => {
-                    let source_dist = uv_build_backend::build_source_dist(
-                        &source_tree,
-                        &output_dir,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::SourceDistFilename(source_dist)
-                }
-                BuildKind::Editable => {
-                    let wheel = uv_build_backend::build_editable(
-                        &source_tree,
-                        &output_dir,
-                        None,
-                        uv_version::version(),
-                        sources.is_none(),
-                    )?;
-                    DistFilename::WheelFilename(wheel)
-                }
+        #[cfg(feature = "source-build")]
+        {
+            let source_tree = if let Some(subdir) = subdirectory {
+                source.join(subdir)
+            } else {
+                source.to_path_buf()
             };
-            Ok(filename)
-        })
-        .await??;
 
-        Ok(Some(filename))
+            // Only perform the direct build if the backend is uv in a compatible version.
+            let source_tree_str = source_tree.display().to_string();
+            let identifier = version_id.unwrap_or_else(|| &source_tree_str);
+            if let Err(reason) = check_direct_build(&source_tree, uv_version::version()) {
+                trace!("Requirements for direct build not matched because {reason}");
+                return Ok(None);
+            }
+
+            debug!("Performing direct build for {identifier}");
+
+            let output_dir = output_dir.to_path_buf();
+            let filename = tokio::task::spawn_blocking(move || -> Result<_> {
+                let filename = match build_kind {
+                    BuildKind::Wheel => {
+                        let wheel = uv_build_backend::build_wheel(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                    BuildKind::Sdist => {
+                        let source_dist = uv_build_backend::build_source_dist(
+                            &source_tree,
+                            &output_dir,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::SourceDistFilename(source_dist)
+                    }
+                    BuildKind::Editable => {
+                        let wheel = uv_build_backend::build_editable(
+                            &source_tree,
+                            &output_dir,
+                            None,
+                            uv_version::version(),
+                            sources.is_none(),
+                        )?;
+                        DistFilename::WheelFilename(wheel)
+                    }
+                };
+                Ok(filename)
+            })
+            .await??;
+
+            Ok(Some(filename))
+        }
     }
 }
 

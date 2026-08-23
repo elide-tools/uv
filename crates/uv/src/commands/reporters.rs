@@ -2,16 +2,19 @@ use std::env;
 use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
 
 use crate::commands::human_readable_bytes;
+use crate::embedded_progress::{self, ProgressOutcome, ProgressUnit};
 use crate::printer::Printer;
 use uv_cache::Removal;
+#[cfg(feature = "publish")]
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     BuildableSource, CachedDist, DistributionMetadata, Name, SourceDist, VersionOrUrlRef,
@@ -27,10 +30,22 @@ use uv_static::EnvVars;
 static HAS_UV_TEST_NO_CLI_PROGRESS: LazyLock<bool> =
     LazyLock::new(|| env::var(EnvVars::UV_TEST_NO_CLI_PROGRESS).is_ok());
 
+fn progress_target(printer: Printer) -> ProgressDrawTarget {
+    if embedded_progress::has_progress_sink() {
+        ProgressDrawTarget::hidden()
+    } else {
+        printer.target()
+    }
+}
+
 #[derive(Debug)]
 struct ProgressReporter {
     printer: Printer,
     root: ProgressBar,
+    embedded_root: Option<usize>,
+    embedded_root_position: AtomicU64,
+    embedded_root_total: AtomicU64,
+    embedded_task_positions: Mutex<FxHashMap<usize, u64>>,
     mode: ProgressMode,
 }
 
@@ -133,7 +148,12 @@ impl From<uv_python::downloads::Direction> for Direction {
 }
 
 impl ProgressReporter {
-    fn new(root: ProgressBar, multi_progress: MultiProgress, printer: Printer) -> Self {
+    fn new(
+        root: ProgressBar,
+        multi_progress: MultiProgress,
+        printer: Printer,
+        embedded_root: Option<usize>,
+    ) -> Self {
         let mode = if env::var(EnvVars::JPY_SESSION_NAME).is_ok() {
             // Disable concurrent progress bars when running inside a Jupyter notebook
             // because the Jupyter terminal does not support clearing previous lines.
@@ -149,11 +169,112 @@ impl ProgressReporter {
         Self {
             printer,
             root,
+            embedded_root,
+            embedded_root_position: AtomicU64::new(0),
+            embedded_root_total: AtomicU64::new(0),
+            embedded_task_positions: Mutex::new(FxHashMap::default()),
             mode,
         }
     }
 
+    fn set_root_length(&self, length: u64) {
+        self.embedded_root_total.store(length, Ordering::Relaxed);
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_root_position.load(Ordering::Relaxed);
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), Some(length), None, None);
+            });
+        }
+    }
+
+    fn set_root_message(&self, message: String) {
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_root_position.load(Ordering::Relaxed);
+            let total = self.embedded_total();
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), total, Some(&message), None);
+            });
+        }
+    }
+
+    fn inc_root(&self, message: Option<String>) {
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_root_position.fetch_add(1, Ordering::Relaxed) + 1;
+            let total = self.embedded_total();
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), total, message.as_deref(), None);
+            });
+        }
+    }
+
+    fn finish_root(&self, message: &str) {
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, message);
+            });
+        }
+    }
+
+    fn embedded_total(&self) -> Option<u64> {
+        let total = self.embedded_root_total.load(Ordering::Relaxed);
+        (total > 0).then_some(total)
+    }
+
+    fn hidden_fallback(&self, multi_progress: &MultiProgress) -> bool {
+        !embedded_progress::has_progress_sink()
+            && multi_progress.is_hidden()
+            && !*HAS_UV_TEST_NO_CLI_PROGRESS
+    }
+
+    fn start_embedded_task(
+        &self,
+        message: &str,
+        total: Option<u64>,
+        unit: ProgressUnit,
+    ) -> Option<usize> {
+        let parent = self.embedded_root?;
+        let id = embedded_progress::start_task(Some(parent), message, total, unit)?;
+        if let Ok(mut positions) = self.embedded_task_positions.lock() {
+            positions.insert(id, 0);
+        }
+        Some(id)
+    }
+
+    fn inc_embedded_task(&self, id: usize, inc: u64) {
+        let position = self
+            .embedded_task_positions
+            .lock()
+            .ok()
+            .and_then(|mut positions| {
+                let position = positions.entry(id).or_insert(0);
+                *position = position.saturating_add(inc);
+                Some(*position)
+            });
+        embedded_progress::with_progress_sink(|sink| {
+            sink.update_task(id, position, None, None, None);
+        });
+    }
+
+    fn finish_embedded_task(&self, id: usize, outcome: ProgressOutcome, message: &str) {
+        if let Ok(mut positions) = self.embedded_task_positions.lock() {
+            positions.remove(&id);
+        }
+        embedded_progress::with_progress_sink(|sink| {
+            sink.finish_task(id, outcome, message);
+        });
+    }
+
     fn on_build_start(&self, source: &BuildableSource) -> usize {
+        if self.embedded_root.is_some() {
+            return self
+                .start_embedded_task(
+                    &format!("Building {}", source.to_color_string()),
+                    None,
+                    ProgressUnit::None,
+                )
+                .unwrap_or(0);
+        }
+
         let ProgressMode::Multi {
             multi_progress,
             state,
@@ -167,7 +288,7 @@ impl ProgressReporter {
 
         let progress = multi_progress.insert_before(
             &self.root,
-            ProgressBar::with_draw_target(None, self.printer.target()),
+            ProgressBar::with_draw_target(None, progress_target(self.printer)),
         );
 
         progress.set_style(ProgressStyle::with_template("{wide_msg}").unwrap());
@@ -176,7 +297,7 @@ impl ProgressReporter {
             "Building".bold().cyan(),
             source.to_color_string()
         );
-        if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+        if self.hidden_fallback(multi_progress) {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         progress.set_message(message);
@@ -187,6 +308,15 @@ impl ProgressReporter {
     }
 
     fn on_build_complete(&self, source: &BuildableSource, id: usize) {
+        if self.embedded_root.is_some() {
+            self.finish_embedded_task(
+                id,
+                ProgressOutcome::Success,
+                &format!("Built {}", source.to_color_string()),
+            );
+            return;
+        }
+
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -206,13 +336,23 @@ impl ProgressReporter {
             "Built".bold().green(),
             source.to_color_string()
         );
-        if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+        if self.hidden_fallback(multi_progress) {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         progress.finish_with_message(message);
     }
 
     fn on_request_start(&self, direction: Direction, name: String, size: Option<u64>) -> usize {
+        if self.embedded_root.is_some() {
+            return self
+                .start_embedded_task(
+                    &format!("{} {name}", direction.as_str()),
+                    size,
+                    ProgressUnit::Bytes,
+                )
+                .unwrap_or(0);
+        }
+
         let ProgressMode::Multi {
             multi_progress,
             state,
@@ -247,7 +387,7 @@ impl ProgressReporter {
         let progress = multi_progress.insert(
             // Make sure not to reorder the initial "Preparing..." bar, or any previous bars.
             position + 1 + state.headers,
-            ProgressBar::with_draw_target(size, self.printer.target()),
+            ProgressBar::with_draw_target(size, progress_target(self.printer)),
         );
 
         if let Some(size) = size {
@@ -263,7 +403,7 @@ impl ProgressReporter {
             );
             // If the file is larger than 1MB, show a message to indicate that this may take
             // a while keeping the log concise.
-            if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS && size > 1024 * 1024 {
+            if self.hidden_fallback(multi_progress) && size > 1024 * 1024 {
                 let _ = writeln!(
                     self.printer.stderr(),
                     "{} {} {}",
@@ -275,7 +415,7 @@ impl ProgressReporter {
             progress.set_message(name);
         } else {
             progress.set_style(ProgressStyle::with_template("{wide_msg:.dim} ....").unwrap());
-            if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+            if self.hidden_fallback(multi_progress) {
                 let _ = writeln!(
                     self.printer.stderr(),
                     "{} {}",
@@ -295,6 +435,11 @@ impl ProgressReporter {
     }
 
     fn on_request_progress(&self, id: usize, bytes: u64) {
+        if self.embedded_root.is_some() {
+            self.inc_embedded_task(id, bytes);
+            return;
+        }
+
         let ProgressMode::Multi { state, .. } = &self.mode else {
             return;
         };
@@ -309,6 +454,17 @@ impl ProgressReporter {
     }
 
     fn on_request_complete(&self, direction: Direction, id: usize) {
+        if self.embedded_root.is_some() {
+            let message = match direction {
+                Direction::Download => "Downloaded",
+                Direction::Upload => "Uploaded",
+                Direction::Extract => "Extracted",
+                Direction::Hash => "Hashed",
+            };
+            self.finish_embedded_task(id, ProgressOutcome::Success, message);
+            return;
+        }
+
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -319,10 +475,7 @@ impl ProgressReporter {
 
         let mut state = state.lock().unwrap();
         if let ProgressBarKind::Numeric { progress, size } = state.bars.remove(&id).unwrap() {
-            if multi_progress.is_hidden()
-                && !*HAS_UV_TEST_NO_CLI_PROGRESS
-                && size.is_none_or(|size| size > 1024 * 1024)
-            {
+            if self.hidden_fallback(multi_progress) && size.is_none_or(|size| size > 1024 * 1024) {
                 let _ = writeln!(
                     self.printer.stderr(),
                     " {} {}",
@@ -380,6 +533,12 @@ impl ProgressReporter {
     }
 
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
+        if self.embedded_root.is_some() {
+            return self
+                .start_embedded_task(&format!("Updating {url} ({rev})"), None, ProgressUnit::None)
+                .unwrap_or(0);
+        }
+
         let ProgressMode::Multi {
             multi_progress,
             state,
@@ -393,12 +552,12 @@ impl ProgressReporter {
 
         let progress = multi_progress.insert_before(
             &self.root,
-            ProgressBar::with_draw_target(None, self.printer.target()),
+            ProgressBar::with_draw_target(None, progress_target(self.printer)),
         );
 
         progress.set_style(ProgressStyle::with_template("{wide_msg}").unwrap());
         let message = format!("   {} {} ({})", "Updating".bold().cyan(), url, rev.dimmed());
-        if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+        if self.hidden_fallback(multi_progress) {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         progress.set_message(message);
@@ -410,6 +569,15 @@ impl ProgressReporter {
     }
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+        if self.embedded_root.is_some() {
+            self.finish_embedded_task(
+                id,
+                ProgressOutcome::Success,
+                &format!("Updated {url} ({rev})"),
+            );
+            return;
+        }
+
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -430,7 +598,7 @@ impl ProgressReporter {
             url,
             rev.dimmed()
         );
-        if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+        if self.hidden_fallback(multi_progress) {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         progress.finish_with_message(message);
@@ -444,8 +612,11 @@ pub(crate) struct PrepareReporter {
 
 impl From<Printer> for PrepareReporter {
     fn from(printer: Printer) -> Self {
-        let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(None, printer.target()));
+        let multi_progress = MultiProgress::with_draw_target(progress_target(printer));
+        let root = multi_progress.add(ProgressBar::with_draw_target(
+            None,
+            progress_target(printer),
+        ));
         root.enable_steady_tick(Duration::from_millis(200));
         root.set_style(
             ProgressStyle::with_template("{spinner:.white} {msg:.dim} ({pos}/{len})")
@@ -454,7 +625,9 @@ impl From<Printer> for PrepareReporter {
         );
         root.set_message("Preparing packages...");
 
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        let embedded_root =
+            embedded_progress::start_task(None, "Preparing packages", None, ProgressUnit::Count);
+        let reporter = ProgressReporter::new(root, multi_progress, printer, embedded_root);
         Self { reporter }
     }
 }
@@ -463,6 +636,7 @@ impl PrepareReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
+        self.reporter.set_root_length(length);
         self
     }
 }
@@ -470,6 +644,7 @@ impl PrepareReporter {
 impl uv_installer::PrepareReporter for PrepareReporter {
     fn on_progress(&self, _dist: &CachedDist) {
         self.reporter.root.inc(1);
+        self.reporter.inc_root(None);
     }
 
     fn on_complete(&self) {
@@ -477,6 +652,7 @@ impl uv_installer::PrepareReporter for PrepareReporter {
         // in Jupyter notebooks.
         self.reporter.root.set_message("");
         self.reporter.root.finish_and_clear();
+        self.reporter.finish_root("Prepared packages");
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
@@ -517,23 +693,39 @@ impl ResolverReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
+        self.reporter.set_root_length(length);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn without_embedded_root(mut self) -> Self {
+        self.reporter.embedded_root = None;
         self
     }
 }
 
 impl From<Printer> for ResolverReporter {
     fn from(printer: Printer) -> Self {
-        let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(None, printer.target()));
+        let multi_progress = MultiProgress::with_draw_target(progress_target(printer));
+        let root = multi_progress.add(ProgressBar::with_draw_target(
+            None,
+            progress_target(printer),
+        ));
         root.enable_steady_tick(Duration::from_millis(200));
         root.set_style(
             ProgressStyle::with_template("{spinner:.white} {wide_msg:.dim}")
                 .unwrap()
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
-        root.set_message("Resolving dependencies...");
+        root.set_message("Resolving Python dependencies...");
 
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Resolving Python dependencies",
+            None,
+            ProgressUnit::Count,
+        );
+        let reporter = ProgressReporter::new(root, multi_progress, printer, embedded_root);
         Self { reporter }
     }
 }
@@ -542,10 +734,14 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_progress(&self, name: &PackageName, version_or_url: &VersionOrUrlRef) {
         match version_or_url {
             VersionOrUrlRef::Version(version) => {
-                self.reporter.root.set_message(format!("{name}=={version}"));
+                let message = format!("{name}=={version}");
+                self.reporter.root.set_message(message.clone());
+                self.reporter.set_root_message(message);
             }
             VersionOrUrlRef::Url(url) => {
-                self.reporter.root.set_message(format!("{name} @ {url}"));
+                let message = format!("{name} @ {url}");
+                self.reporter.root.set_message(message.clone());
+                self.reporter.set_root_message(message);
             }
         }
     }
@@ -553,6 +749,7 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_complete(&self) {
         self.reporter.root.set_message("");
         self.reporter.root.finish_and_clear();
+        self.reporter.finish_root("Python dependencies resolved");
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
@@ -617,16 +814,30 @@ impl uv_distribution::Reporter for ResolverReporter {
 #[derive(Debug)]
 pub(crate) struct InstallReporter {
     progress: ProgressBar,
+    embedded_root: Option<usize>,
+    embedded_position: AtomicU64,
+    embedded_total: AtomicU64,
 }
 
 impl From<Printer> for InstallReporter {
     fn from(printer: Printer) -> Self {
-        let progress = ProgressBar::with_draw_target(None, printer.target());
+        let progress = ProgressBar::with_draw_target(None, progress_target(printer));
         progress.set_style(
             ProgressStyle::with_template("{bar:20} [{pos}/{len}] {wide_msg:.dim}").unwrap(),
         );
-        progress.set_message("Installing wheels...");
-        Self { progress }
+        progress.set_message("Installing Python packages...");
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Installing Python packages",
+            None,
+            ProgressUnit::Count,
+        );
+        Self {
+            progress,
+            embedded_root,
+            embedded_position: AtomicU64::new(0),
+            embedded_total: AtomicU64::new(0),
+        }
     }
 }
 
@@ -634,19 +845,39 @@ impl InstallReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
+        self.embedded_total.store(length, Ordering::Relaxed);
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(0), Some(length), None, None);
+            });
+        }
         self
     }
 }
 
 impl uv_installer::InstallReporter for InstallReporter {
     fn on_install_progress(&self, wheel: &CachedDist) {
-        self.progress.set_message(format!("{wheel}"));
+        let message = format!("{wheel}");
+        self.progress.set_message(message.clone());
         self.progress.inc(1);
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_position.fetch_add(1, Ordering::Relaxed) + 1;
+            let total = self.embedded_total.load(Ordering::Relaxed);
+            let total = (total > 0).then_some(total);
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), total, Some(&message), None);
+            });
+        }
     }
 
     fn on_install_complete(&self) {
         self.progress.set_message("");
         self.progress.finish_and_clear();
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, "Python packages installed");
+            });
+        }
     }
 }
 
@@ -663,9 +894,12 @@ impl PythonDownloadReporter {
 
     /// Initialize a [`PythonDownloadReporter`] for multiple Python downloads.
     pub(crate) fn new(printer: Printer, length: Option<u64>) -> Self {
-        let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(length, printer.target()));
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        let multi_progress = MultiProgress::with_draw_target(progress_target(printer));
+        let root = multi_progress.add(ProgressBar::with_draw_target(
+            length,
+            progress_target(printer),
+        ));
+        let reporter = ProgressReporter::new(root, multi_progress, printer, None);
         Self { reporter }
     }
 }
@@ -690,11 +924,13 @@ impl uv_python::downloads::Reporter for PythonDownloadReporter {
     }
 }
 
+#[cfg(feature = "publish")]
 #[derive(Debug)]
 pub(crate) struct PublishReporter {
     reporter: ProgressReporter,
 }
 
+#[cfg(feature = "publish")]
 impl PublishReporter {
     /// Initialize a [`PublishReporter`] for a single upload.
     pub(crate) fn single(printer: Printer) -> Self {
@@ -703,13 +939,23 @@ impl PublishReporter {
 
     /// Initialize a [`PublishReporter`] for multiple uploads.
     fn new(printer: Printer, length: Option<u64>) -> Self {
-        let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(length, printer.target()));
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        let multi_progress = MultiProgress::with_draw_target(progress_target(printer));
+        let root = multi_progress.add(ProgressBar::with_draw_target(
+            length,
+            progress_target(printer),
+        ));
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Publishing distributions",
+            length,
+            ProgressUnit::Count,
+        );
+        let reporter = ProgressReporter::new(root, multi_progress, printer, embedded_root);
         Self { reporter }
     }
 }
 
+#[cfg(feature = "publish")]
 impl uv_publish::Reporter for PublishReporter {
     fn on_progress(&self, _name: &str, id: usize) {
         self.reporter.on_download_complete(id);
@@ -743,16 +989,30 @@ impl uv_publish::Reporter for PublishReporter {
 #[derive(Debug)]
 pub(crate) struct LatestVersionReporter {
     progress: ProgressBar,
+    embedded_root: Option<usize>,
+    embedded_position: AtomicU64,
+    embedded_total: AtomicU64,
 }
 
 impl From<Printer> for LatestVersionReporter {
     fn from(printer: Printer) -> Self {
-        let progress = ProgressBar::with_draw_target(None, printer.target());
+        let progress = ProgressBar::with_draw_target(None, progress_target(printer));
         progress.set_style(
             ProgressStyle::with_template("{bar:20} [{pos}/{len}] {wide_msg:.dim}").unwrap(),
         );
         progress.set_message("Fetching latest versions...");
-        Self { progress }
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Fetching latest versions",
+            None,
+            ProgressUnit::Count,
+        );
+        Self {
+            progress,
+            embedded_root,
+            embedded_position: AtomicU64::new(0),
+            embedded_total: AtomicU64::new(0),
+        }
     }
 }
 
@@ -760,32 +1020,58 @@ impl LatestVersionReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
+        self.embedded_total.store(length, Ordering::Relaxed);
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(0), Some(length), None, None);
+            });
+        }
         self
     }
 
     pub(crate) fn on_fetch_progress(&self) {
         self.progress.inc(1);
+        self.inc_embedded(None);
     }
 
     pub(crate) fn on_fetch_version(&self, name: &PackageName, version: &Version) {
-        self.progress.set_message(format!("{name} v{version}"));
+        let message = format!("{name} v{version}");
+        self.progress.set_message(message.clone());
         self.progress.inc(1);
+        self.inc_embedded(Some(message));
     }
 
     pub(crate) fn on_fetch_complete(&self) {
         self.progress.set_message("");
         self.progress.finish_and_clear();
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, "Fetched latest versions");
+            });
+        }
+    }
+
+    fn inc_embedded(&self, message: Option<String>) {
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_position.fetch_add(1, Ordering::Relaxed) + 1;
+            let total = self.embedded_total.load(Ordering::Relaxed);
+            let total = (total > 0).then_some(total);
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), total, message.as_deref(), None);
+            });
+        }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct AuditReporter {
     progress: ProgressBar,
+    embedded_root: Option<usize>,
 }
 
 impl From<Printer> for AuditReporter {
     fn from(printer: Printer) -> Self {
-        let progress = ProgressBar::with_draw_target(None, printer.target());
+        let progress = ProgressBar::with_draw_target(None, progress_target(printer));
         progress.enable_steady_tick(Duration::from_millis(200));
         progress.set_style(
             ProgressStyle::with_template("{spinner:.white} {wide_msg:.dim}")
@@ -793,7 +1079,12 @@ impl From<Printer> for AuditReporter {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
         progress.set_message("Auditing dependencies...");
-        Self { progress }
+        let embedded_root =
+            embedded_progress::start_task(None, "Auditing dependencies", None, ProgressUnit::None);
+        Self {
+            progress,
+            embedded_root,
+        }
     }
 }
 
@@ -801,66 +1092,118 @@ impl AuditReporter {
     pub(crate) fn on_audit_complete(&self) {
         self.progress.set_message("");
         self.progress.finish_and_clear();
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, "Audited dependencies");
+            });
+        }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct CleaningDirectoryReporter {
     bar: ProgressBar,
+    embedded_root: Option<usize>,
+    embedded_position: AtomicU64,
 }
 
 impl CleaningDirectoryReporter {
     /// Initialize a [`CleaningDirectoryReporter`] for cleaning the cache directory.
     pub(crate) fn new(printer: Printer, max: Option<usize>) -> Self {
-        let bar = ProgressBar::with_draw_target(max.map(|m| m as u64), printer.target());
+        let bar = ProgressBar::with_draw_target(max.map(|m| m as u64), progress_target(printer));
         bar.set_style(
             ProgressStyle::with_template("{prefix} [{bar:20}] {percent}%")
                 .unwrap()
                 .progress_chars("=> "),
         );
         bar.set_prefix(format!("{}", "Cleaning".bold().cyan()));
-        Self { bar }
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Cleaning cache directories",
+            max.map(|m| m as u64),
+            ProgressUnit::Count,
+        );
+        Self {
+            bar,
+            embedded_root,
+            embedded_position: AtomicU64::new(0),
+        }
     }
 }
 
 impl uv_cache::CleanReporter for CleaningDirectoryReporter {
     fn on_clean(&self) {
         self.bar.inc(1);
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_position.fetch_add(1, Ordering::Relaxed) + 1;
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), None, None, None);
+            });
+        }
     }
 
     fn on_complete(&self) {
         self.bar.finish_and_clear();
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, "Cleaned cache directories");
+            });
+        }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct CleaningPackageReporter {
     bar: ProgressBar,
+    embedded_root: Option<usize>,
+    embedded_position: AtomicU64,
 }
 
 impl CleaningPackageReporter {
     /// Initialize a [`CleaningPackageReporter`] for cleaning packages from the cache.
     pub(crate) fn new(printer: Printer, max: Option<usize>) -> Self {
-        let bar = ProgressBar::with_draw_target(max.map(|m| m as u64), printer.target());
+        let bar = ProgressBar::with_draw_target(max.map(|m| m as u64), progress_target(printer));
         bar.set_style(
             ProgressStyle::with_template("{prefix} [{bar:20}] {pos}/{len}{msg}")
                 .unwrap()
                 .progress_chars("=> "),
         );
         bar.set_prefix(format!("{}", "Cleaning".bold().cyan()));
-        Self { bar }
+        let embedded_root = embedded_progress::start_task(
+            None,
+            "Cleaning cached packages",
+            max.map(|m| m as u64),
+            ProgressUnit::Count,
+        );
+        Self {
+            bar,
+            embedded_root,
+            embedded_position: AtomicU64::new(0),
+        }
     }
 
     pub(crate) fn on_clean(&self, package: &str, removal: &Removal) {
         self.bar.inc(1);
-        self.bar.set_message(format!(
+        let message = format!(
             ": {}, {} files {} folders removed",
             package, removal.num_files, removal.num_dirs,
-        ));
+        );
+        self.bar.set_message(message.clone());
+        if let Some(id) = self.embedded_root {
+            let position = self.embedded_position.fetch_add(1, Ordering::Relaxed) + 1;
+            embedded_progress::with_progress_sink(|sink| {
+                sink.update_task(id, Some(position), None, Some(&message), None);
+            });
+        }
     }
 
     pub(crate) fn on_complete(&self) {
         self.bar.finish_and_clear();
+        if let Some(id) = self.embedded_root {
+            embedded_progress::with_progress_sink(|sink| {
+                sink.finish_task(id, ProgressOutcome::Success, "Cleaned cached packages");
+            });
+        }
     }
 }
 
@@ -893,9 +1236,14 @@ pub(crate) struct BinaryDownloadReporter {
 impl BinaryDownloadReporter {
     /// Initialize a [`BinaryDownloadReporter`] for a single binary download.
     pub(crate) fn single(printer: Printer) -> Self {
-        let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(None, printer.target()));
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        let multi_progress = MultiProgress::with_draw_target(progress_target(printer));
+        let root = multi_progress.add(ProgressBar::with_draw_target(
+            None,
+            progress_target(printer),
+        ));
+        let embedded_root =
+            embedded_progress::start_task(None, "Downloading binary", None, ProgressUnit::Count);
+        let reporter = ProgressReporter::new(root, multi_progress, printer, embedded_root);
         Self { reporter }
     }
 }

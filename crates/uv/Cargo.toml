@@ -15,11 +15,11 @@ default-run = "uv"
 workspace = true
 
 [dependencies]
-uv-audit = { workspace = true }
+uv-audit = { workspace = true, optional = true }
 uv-auth = { workspace = true }
 uv-bin-install = { workspace = true }
-uv-build-backend = { workspace = true }
-uv-build-frontend = { workspace = true }
+uv-build-backend = { workspace = true, optional = true }
+uv-build-frontend = { workspace = true, optional = true }
 uv-cache = { workspace = true }
 uv-cache-info = { workspace = true }
 uv-cache-key = { workspace = true }
@@ -47,7 +47,7 @@ uv-performance-memory-allocator = { workspace = true, optional = true }
 uv-platform = { workspace = true }
 uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
-uv-publish = { workspace = true }
+uv-publish = { workspace = true, optional = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
 uv-redacted = { workspace = true }
@@ -59,12 +59,12 @@ uv-settings = { workspace = true }
 uv-shell = { workspace = true }
 uv-static = { workspace = true }
 uv-test = { workspace = true, optional = true }
-uv-tool = { workspace = true }
+uv-tool = { workspace = true, optional = true }
 uv-torch = { workspace = true }
 uv-trampoline-builder = { workspace = true }
 uv-types = { workspace = true }
 uv-version = { workspace = true }
-uv-virtualenv = { workspace = true }
+uv-virtualenv = { workspace = true, optional = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true, features = ["clap"] }
 
@@ -162,15 +162,93 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "test-defaults"]
-native-auth = []
+default = [
+  "performance",
+  "test-defaults",
+  "install-tracing-subscriber",
+  "python-managed",
+  "publish",
+  "tool",
+  "audit",
+  "init",
+  "self-commands",
+  "pip",
+  "python",
+  "build",
+  "venv",
+  "cache",
+  "auth",
+  "workspace",
+  "source-build",
+  "project",
+  "run",
+]
+native-auth = ["native-keyring"]
+native-keyring = ["uv-auth/native-keyring"]
+cloud-auth = ["uv-auth/cloud-auth"]
+
+# Build source distributions (PEP 517) during resolution/installation. Disable
+# (e.g. for a wheel-only embedding) so sdist installs refuse with a clear error.
+source-build = ["uv-dispatch/source-build"]
+
+# Enable Python installation management (uv python install/uninstall/pin/dir/update-shell).
+# Disable to strip download-from-python-build-standalone while keeping Python discovery
+# (uv python find/list, uv sync against existing venvs) intact.
+python-managed = ["python", "uv-cli/python-managed", "uv-python/python-managed"]
+
+# Enable `uv publish` and its uv-publish sub-crate.
+publish = ["dep:uv-publish", "uv-cli/publish"]
+
+# Enable the `uv tool` namespace and its uv-tool sub-crate.
+tool = ["dep:uv-tool", "uv-cli/tool", "dep:uv-virtualenv"]
+
+# Enable `uv audit` and its uv-audit sub-crate.
+audit = ["dep:uv-audit", "uv-cli/audit"]
+
+# Enable `uv init`.
+init = ["uv-cli/init"]
+
+# Enable the `uv project` namespace (sync/lock/add/remove/tree/export/version/format).
+project = ["uv-cli/project", "dep:uv-virtualenv"]
+
+# Enable `uv run`. Implies `project`: `uv run` drives the project lock/sync machinery.
+run = ["uv-cli/run", "dep:uv-virtualenv", "project"]
+
+# Enable the `uv pip` namespace.
+pip = ["uv-cli/pip"]
+
+# Enable the `uv python` namespace (find/list always; managed installs need `python-managed`).
+python = ["uv-cli/python"]
+
+# Enable `uv build` (frontend wheel/sdist build).
+build = ["uv-cli/build", "dep:uv-build-frontend", "dep:uv-build-backend", "uv-workspace/build-backend", "source-build"]
+
+# Enable `uv venv`.
+venv = ["uv-cli/venv", "dep:uv-virtualenv"]
+
+# Enable the `uv cache` namespace and the hidden `uv clean` alias.
+cache = ["uv-cli/cache"]
+
+# Enable the `uv auth` namespace.
+auth = ["uv-cli/auth"]
+
+# Enable the `uv workspace` namespace.
+workspace = ["uv-cli/workspace"]
+
+# Enable the `uv self` namespace (version + update).
+self-commands = ["uv-cli/self-commands"]
+
+# Install a global `tracing_subscriber` in `logging::setup_logging`. When disabled,
+# tracing events still emit through the macros but no global subscriber is installed,
+# so an embedder's subscriber receives them.
+install-tracing-subscriber = []
 # Use better memory allocators, etc.
 performance = ["performance-memory-allocator"]
 performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
 
 # Adds self-update functionality. This feature is only enabled for uv's cargo-dist installer
 # and should be left unselected when building uv for package managers.
-self-update = ["axoupdater", "uv-cli/self-update"]
+self-update = ["self-commands", "axoupdater", "uv-cli/self-update"]
 
 # Features for development only.
 tracing-durations-export = ["dep:tracing-durations-export", "uv-resolver/tracing-durations-export", "uv-settings/tracing-durations-export", "uv-test/tracing-durations-export"]

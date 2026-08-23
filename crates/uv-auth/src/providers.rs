@@ -1,19 +1,29 @@
-use std::borrow::Cow;
 use std::sync::LazyLock;
 
+#[cfg(feature = "cloud-auth")]
 use anyhow::{Context, Result};
+#[cfg(feature = "cloud-auth")]
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
+#[cfg(feature = "cloud-auth")]
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
+#[cfg(feature = "cloud-auth")]
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
+#[cfg(feature = "cloud-auth")]
+use std::borrow::Cow;
 use tracing::debug;
-use url::{ParseError, Url};
+#[cfg(feature = "cloud-auth")]
+use url::ParseError;
+use url::Url;
 
+#[cfg(feature = "cloud-auth")]
 use uv_preview::{Preview, PreviewFeature};
 use uv_static::EnvVars;
+#[cfg(feature = "cloud-auth")]
 use uv_warnings::warn_user_once;
 
 use crate::Credentials;
 use crate::credentials::Token;
+#[cfg(feature = "cloud-auth")]
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
 
@@ -59,13 +69,16 @@ impl HuggingFaceProvider {
 }
 
 /// The [`Url`] for the S3 endpoint, if set.
+#[cfg(feature = "cloud-auth")]
 static S3_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_S3_ENDPOINT_URL));
 
 /// A provider for authentication credentials for S3 endpoints.
+#[cfg(feature = "cloud-auth")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct S3EndpointProvider;
 
+#[cfg(feature = "cloud-auth")]
 impl S3EndpointProvider {
     /// Returns `true` if the URL matches the configured S3 endpoint.
     pub(crate) fn is_s3_endpoint(url: &Url, preview: Preview) -> Result<bool> {
@@ -94,6 +107,7 @@ impl S3EndpointProvider {
     ///
     /// This is potentially expensive as it may invoke credential helpers, so the result
     /// should be cached.
+    #[cfg(feature = "cloud-auth")]
     pub(crate) fn create_signer() -> AwsDefaultSigner {
         // TODO(charlie): Can `reqsign` infer the region for us? Profiles, for example,
         // often have a region set already.
@@ -109,13 +123,16 @@ impl S3EndpointProvider {
 }
 
 /// The [`Url`] for the GCS endpoint, if set.
+#[cfg(feature = "cloud-auth")]
 static GCS_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_GCS_ENDPOINT_URL));
 
 /// A provider for authentication credentials for GCS endpoints.
+#[cfg(feature = "cloud-auth")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GcsEndpointProvider;
 
+#[cfg(feature = "cloud-auth")]
 impl GcsEndpointProvider {
     /// Returns `true` if the URL matches the configured GCS endpoint.
     pub(crate) fn is_gcs_endpoint(url: &Url, preview: Preview) -> Result<bool> {
@@ -144,19 +161,23 @@ impl GcsEndpointProvider {
     ///
     /// This is potentially expensive as it may invoke credential helpers, so the result
     /// should be cached.
+    #[cfg(feature = "cloud-auth")]
     pub(crate) fn create_signer() -> GcsDefaultSigner {
         reqsign::google::default_signer("storage.googleapis.com")
     }
 }
 
 /// The [`Url`] for the Azure endpoint, if set.
+#[cfg(feature = "cloud-auth")]
 static AZURE_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_AZURE_ENDPOINT_URL));
 
 /// A provider for authentication credentials for Azure endpoints.
+#[cfg(feature = "cloud-auth")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AzureEndpointProvider;
 
+#[cfg(feature = "cloud-auth")]
 impl AzureEndpointProvider {
     /// Returns `true` if the URL matches the configured Azure endpoint.
     pub(crate) fn is_azure_endpoint(url: &Url, preview: Preview) -> Result<bool> {
@@ -185,12 +206,14 @@ impl AzureEndpointProvider {
     ///
     /// This is potentially expensive as it may invoke credential helpers, so the result
     /// should be cached.
+    #[cfg(feature = "cloud-auth")]
     pub(crate) fn create_signer() -> AzureDefaultSigner {
         reqsign::azure::default_signer()
     }
 }
 
 /// Returns the configured endpoint [`Url`], if set and valid.
+#[cfg(feature = "cloud-auth")]
 fn endpoint_url(env_var: &str) -> Result<Option<Url>, ParseError> {
     let Some(endpoint_url) = std::env::var(env_var).ok() else {
         return Ok(None);
@@ -202,6 +225,7 @@ fn endpoint_url(env_var: &str) -> Result<Option<Url>, ParseError> {
 ///
 /// The URL must be in the same realm, or a subdomain of the endpoint realm, and must be under the
 /// endpoint path using complete path-segment prefix matching.
+#[cfg(feature = "cloud-auth")]
 fn is_endpoint_url(url: &Url, endpoint_url: &Url) -> bool {
     let endpoint_realm = RealmRef::from(endpoint_url);
     let realm = RealmRef::from(url);
@@ -212,7 +236,7 @@ fn is_endpoint_url(url: &Url, endpoint_url: &Url) -> bool {
     is_path_prefix(endpoint_url.path(), url.path())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cloud-auth"))]
 mod tests {
     use super::*;
 

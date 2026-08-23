@@ -15,11 +15,22 @@ use uv_pep440::{Version, strip_local_version_sentinels};
 use crate::commands::pip;
 use crate::commands::pip::install::ExternallyManagedError;
 use crate::commands::pip::operations::ExtrasWithoutSourceError;
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 use crate::commands::project::ProjectError;
+#[cfg(feature = "project")]
 use crate::commands::project::remove::DependencyNotFoundError;
+#[cfg(feature = "run")]
 use crate::commands::project::run::RecursionLimitError;
+#[cfg(feature = "project")]
 use crate::commands::project::version::MissingProjectVersionError;
+#[cfg(feature = "tool")]
 use crate::commands::tool::common::NoExecutablesError;
+#[cfg(feature = "tool")]
 use crate::commands::tool::run::ToolRunScriptError;
 use crate::printer::Printer;
 
@@ -236,16 +247,30 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);
         collect_hint::<uv_resolver::LockError>(cause, &mut hints);
         collect_hint::<pip::operations::Error>(cause, &mut hints);
+        #[cfg(feature = "tool")]
         collect_hint::<ToolRunScriptError>(cause, &mut hints);
+        #[cfg(feature = "run")]
         collect_hint::<RecursionLimitError>(cause, &mut hints);
+        #[cfg(feature = "project")]
         collect_hint::<DependencyNotFoundError>(cause, &mut hints);
         collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);
+        #[cfg(any(
+            feature = "project",
+            feature = "run",
+            feature = "init",
+            feature = "audit"
+        ))]
         collect_hint::<ProjectError>(cause, &mut hints);
+        #[cfg(feature = "tool")]
         collect_hint::<NoExecutablesError>(cause, &mut hints);
         collect_hint::<ExternallyManagedError>(cause, &mut hints);
+        #[cfg(feature = "project")]
         collect_hint::<MissingProjectVersionError>(cause, &mut hints);
+        #[cfg(feature = "build")]
         collect_hint::<crate::commands::build_frontend::Error>(cause, &mut hints);
+        #[cfg(feature = "build")]
         collect_hint::<uv_build_backend::Error>(cause, &mut hints);
+        #[cfg(feature = "build")]
         collect_hint::<uv_build_frontend::Error>(cause, &mut hints);
         collect_hint::<uv_python::Error>(cause, &mut hints);
         collect_hint::<uv_installer::IncompatibleWheelError>(cause, &mut hints);
@@ -256,6 +281,12 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<uv_python::InterpreterError>(cause, &mut hints);
         collect_hint::<uv_workspace::pyproject::SourceError>(cause, &mut hints);
         collect_hint::<uv_distribution::LoweringError>(cause, &mut hints);
+        #[cfg(any(
+            feature = "project",
+            feature = "run",
+            feature = "tool",
+            feature = "venv"
+        ))]
         collect_hint::<uv_virtualenv::Error>(cause, &mut hints);
         collect_hint::<uv_client::Error>(cause, &mut hints);
         #[cfg(not(feature = "self-update"))]

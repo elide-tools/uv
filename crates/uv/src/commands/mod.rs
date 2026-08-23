@@ -10,60 +10,117 @@ use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_warnings::warn_user;
 
+#[cfg(feature = "auth")]
 pub(crate) use auth::dir::dir as auth_dir;
+#[cfg(feature = "auth")]
 pub(crate) use auth::helper::helper as auth_helper;
+#[cfg(feature = "auth")]
 pub(crate) use auth::login::login as auth_login;
+#[cfg(feature = "auth")]
 pub(crate) use auth::logout::logout as auth_logout;
+#[cfg(feature = "auth")]
 pub(crate) use auth::token::token as auth_token;
+#[cfg(feature = "build")]
 pub(crate) use build_frontend::build_frontend;
+#[cfg(feature = "cache")]
 pub(crate) use cache_clean::cache_clean;
+#[cfg(feature = "cache")]
 pub(crate) use cache_dir::cache_dir;
+#[cfg(feature = "cache")]
 pub(crate) use cache_prune::cache_prune;
+#[cfg(feature = "cache")]
 pub(crate) use cache_size::cache_size;
 pub(crate) use help::help;
+#[cfg(feature = "pip")]
 pub(crate) use pip::check::pip_check;
+#[cfg(feature = "pip")]
 pub(crate) use pip::compile::pip_compile;
+#[cfg(feature = "pip")]
 pub(crate) use pip::freeze::pip_freeze;
+#[cfg(feature = "pip")]
 pub(crate) use pip::install::pip_install;
+#[cfg(feature = "pip")]
 pub(crate) use pip::list::pip_list;
+#[cfg(feature = "pip")]
 pub(crate) use pip::show::pip_show;
+#[cfg(feature = "pip")]
 pub(crate) use pip::sync::pip_sync;
+#[cfg(feature = "pip")]
 pub(crate) use pip::tree::pip_tree;
+#[cfg(feature = "pip")]
 pub(crate) use pip::uninstall::pip_uninstall;
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 pub(crate) use project::ProjectError;
+#[cfg(feature = "project")]
 pub(crate) use project::add::add;
+#[cfg(feature = "audit")]
 pub(crate) use project::audit::audit;
+#[cfg(feature = "project")]
 pub(crate) use project::check::check;
+#[cfg(feature = "project")]
 pub(crate) use project::export::export;
+#[cfg(feature = "project")]
 pub(crate) use project::format::format;
+#[cfg(feature = "init")]
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
+#[cfg(feature = "project")]
 pub(crate) use project::lock::lock;
+#[cfg(feature = "project")]
 pub(crate) use project::remove::remove;
+#[cfg(feature = "run")]
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
+#[cfg(feature = "project")]
 pub(crate) use project::sync::sync;
+#[cfg(feature = "project")]
 pub(crate) use project::tree::tree;
+#[cfg(feature = "project")]
 pub(crate) use project::upgrade::upgrade;
+#[cfg(feature = "project")]
 pub(crate) use project::version::{project_version, self_version};
+#[cfg(feature = "publish")]
 pub(crate) use publish::publish;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::dir::dir as python_dir;
+#[cfg(feature = "python")]
 pub(crate) use python::find::find as python_find;
+#[cfg(feature = "python")]
 pub(crate) use python::find::find_script as python_find_script;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::install as python_install;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::install::{PythonUpgrade, PythonUpgradeSource};
+#[cfg(feature = "python")]
 pub(crate) use python::list::list as python_list;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::pin::pin as python_pin;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::uninstall::uninstall as python_uninstall;
+#[cfg(all(feature = "python", feature = "python-managed"))]
 pub(crate) use python::update_shell::update_shell as python_update_shell;
 #[cfg(feature = "self-update")]
 pub(crate) use self_update::self_update;
+#[cfg(all(feature = "tool", feature = "audit"))]
 pub(crate) use tool::audit::audit as tool_audit;
+#[cfg(feature = "tool")]
 pub(crate) use tool::dir::dir as tool_dir;
+#[cfg(feature = "tool")]
 pub(crate) use tool::install::install as tool_install;
+#[cfg(feature = "tool")]
 pub(crate) use tool::list::list as tool_list;
+#[cfg(feature = "tool")]
 pub(crate) use tool::run::ToolRunCommand;
+#[cfg(feature = "tool")]
 pub(crate) use tool::run::run as tool_run;
+#[cfg(feature = "tool")]
 pub(crate) use tool::uninstall::uninstall as tool_uninstall;
+#[cfg(feature = "tool")]
 pub(crate) use tool::update_shell::update_shell as tool_update_shell;
+#[cfg(feature = "tool")]
 pub(crate) use tool::upgrade::upgrade as tool_upgrade;
 use uv_cache::Cache;
 use uv_configuration::Concurrency;
@@ -72,35 +129,58 @@ use uv_fs::{CWD, Simplified};
 use uv_installer::{compile_files, compile_tree};
 use uv_python::PythonEnvironment;
 use uv_scripts::Pep723Script;
+#[cfg(feature = "venv")]
 pub(crate) use venv::venv;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::dir::dir;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::list::list;
+#[cfg(feature = "workspace")]
 pub(crate) use workspace::metadata::metadata;
 
 use crate::commands::pip::operations::ChangedDist;
 use crate::printer::Printer;
 
+#[cfg(feature = "auth")]
 mod auth;
+#[cfg(feature = "build")]
 pub(crate) mod build_backend;
+#[cfg(feature = "build")]
 mod build_frontend;
+#[cfg(feature = "cache")]
 mod cache_clean;
+#[cfg(feature = "cache")]
 mod cache_dir;
+#[cfg(feature = "cache")]
 mod cache_prune;
+#[cfg(feature = "cache")]
 mod cache_size;
 pub(crate) mod diagnostics;
 mod editable;
 mod help;
 pub(crate) mod pip;
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 mod project;
+#[cfg(feature = "publish")]
 mod publish;
 mod pylock;
+#[cfg(feature = "python")]
 mod python;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_update;
+#[cfg(feature = "tool")]
 mod tool;
+#[cfg(any(all(feature = "python", feature = "python-managed"), feature = "tool"))]
 mod update_shell;
+#[cfg(feature = "venv")]
 mod venv;
+#[cfg(feature = "workspace")]
 mod workspace;
 
 /// The process status for a command that completed without a final error to render.

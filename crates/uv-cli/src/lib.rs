@@ -11,6 +11,7 @@ use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use clap::{ValueEnum, ValueHint};
 
+#[cfg(feature = "audit")]
 use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;
@@ -32,6 +33,7 @@ use uv_resolver::{
     AnnotationStyle, ExcludeNewerOverride, ExcludeNewerPackageEntry, ForkStrategy, PrereleaseMode,
     PrereleasePackageEntry, ResolutionMode,
 };
+#[cfg(feature = "python-managed")]
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
@@ -452,6 +454,7 @@ impl From<ColorChoice> for anstream::ColorChoice {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Manage authentication.
+    #[cfg(feature = "auth")]
     #[command(
         after_help = "Use `uv help auth` for more details.",
         after_long_help = ""
@@ -459,10 +462,17 @@ pub enum Commands {
     Auth(AuthNamespace),
 
     /// Manage Python projects.
+    #[cfg(any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    ))]
     #[command(flatten)]
     Project(Box<ProjectCommand>),
 
     /// Run and install commands provided by Python packages.
+    #[cfg(feature = "tool")]
     #[command(
         after_help = "Use `uv help tool` for more details.",
         after_long_help = ""
@@ -510,6 +520,7 @@ pub enum Commands {
     /// uv supports discovering CPython, PyPy, and GraalPy interpreters. Unsupported interpreters
     /// will be skipped during discovery. If an unsupported interpreter implementation is requested,
     /// uv will exit with an error.
+    #[cfg(feature = "python")]
     #[clap(verbatim_doc_comment)]
     #[command(
         after_help = "Use `uv help python` for more details.",
@@ -517,6 +528,7 @@ pub enum Commands {
     )]
     Python(PythonNamespace),
     /// Manage Python packages with a pip-compatible interface.
+    #[cfg(feature = "pip")]
     #[command(
         after_help = "Use `uv help pip` for more details.",
         after_long_help = ""
@@ -537,6 +549,7 @@ pub enum Commands {
     /// When using uv, the virtual environment does not need to be activated. uv
     /// will find a virtual environment (named `.venv`) in the working directory
     /// or any parent directories.
+    #[cfg(feature = "venv")]
     #[command(
         alias = "virtualenv",
         alias = "v",
@@ -560,14 +573,17 @@ pub enum Commands {
     ///
     /// If passed a source distribution, `uv build --wheel` will build a wheel
     /// from the source distribution.
+    #[cfg(feature = "build")]
     #[command(
         after_help = "Use `uv help build` for more details.",
         after_long_help = ""
     )]
     Build(BuildArgs),
     /// Upload distributions to an index.
+    #[cfg(feature = "publish")]
     Publish(PublishArgs),
     /// Inspect uv workspaces.
+    #[cfg(feature = "workspace")]
     #[command(
         after_help = "Use `uv help workspace` for more details.",
         after_long_help = ""
@@ -577,21 +593,25 @@ pub enum Commands {
     ///
     /// These commands are not directly exposed to the user, instead users invoke their build
     /// frontend (PEP 517) which calls the Python shims which calls back into uv with this method.
+    #[cfg(feature = "build")]
     #[command(hide = true)]
     BuildBackend {
         #[command(subcommand)]
         command: BuildBackendCommand,
     },
     /// Manage uv's cache.
+    #[cfg(feature = "cache")]
     #[command(
         after_help = "Use `uv help cache` for more details.",
         after_long_help = ""
     )]
     Cache(CacheNamespace),
     /// Manage the uv executable.
+    #[cfg(feature = "self-commands")]
     #[command(name = "self")]
     Self_(SelfNamespace),
     /// Clear the cache, removing all entries or those linked to specific packages.
+    #[cfg(feature = "cache")]
     #[command(hide = true)]
     Clean(CleanArgs),
     /// Generate shell completion
@@ -870,12 +890,14 @@ impl TypedValueParser for VersionBumpSpecValueParser {
     }
 }
 
+#[cfg(feature = "self-commands")]
 #[derive(Args)]
 pub struct SelfNamespace {
     #[command(subcommand)]
     pub command: SelfCommand,
 }
 
+#[cfg(feature = "self-commands")]
 #[derive(Subcommand)]
 pub enum SelfCommand {
     /// Update uv.
@@ -906,12 +928,14 @@ pub struct SelfUpdateArgs {
     pub dry_run: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args)]
 pub struct CacheNamespace {
     #[command(subcommand)]
     pub command: CacheCommand,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Subcommand)]
 pub enum CacheCommand {
     /// Clear the cache, removing all entries or those linked to specific packages.
@@ -941,6 +965,7 @@ pub enum CacheCommand {
     Size(SizeArgs),
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct CleanArgs {
     /// The packages to remove from the cache.
@@ -955,6 +980,7 @@ pub struct CleanArgs {
     pub force: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct PruneArgs {
     /// Optimize the cache for persistence in a continuous integration environment, like GitHub
@@ -981,6 +1007,7 @@ pub struct PruneArgs {
     pub force: bool,
 }
 
+#[cfg(feature = "cache")]
 #[derive(Args, Debug)]
 pub struct SizeArgs {
     /// Select the output format.
@@ -997,6 +1024,7 @@ pub struct SizeArgs {
     pub human: bool,
 }
 
+#[cfg(feature = "pip")]
 #[derive(Args)]
 pub struct PipNamespace {
     #[command(subcommand)]
@@ -1009,6 +1037,7 @@ pub struct PipNamespace {
     pub cert: Option<PathBuf>,
 }
 
+#[cfg(feature = "pip")]
 #[derive(Subcommand)]
 pub enum PipCommand {
     /// Compile a `requirements.in` file to a `requirements.txt` or `pylock.toml` file.
@@ -1080,6 +1109,12 @@ pub enum PipCommand {
     Debug(PipDebugArgs),
 }
 
+#[cfg(any(
+    feature = "project",
+    feature = "run",
+    feature = "init",
+    feature = "audit"
+))]
 #[derive(Subcommand)]
 pub enum ProjectCommand {
     /// Run a command or script.
@@ -1111,6 +1146,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help run` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "run")]
     Run(RunArgs),
     /// Create a new project.
     ///
@@ -1123,6 +1159,7 @@ pub enum ProjectCommand {
     ///
     /// Some project state is not created until needed, e.g., the project virtual environment
     /// (`.venv`) and lockfile (`uv.lock`) are lazily created during the first sync.
+    #[cfg(feature = "init")]
     Init(InitArgs),
     /// Add dependencies to the project.
     ///
@@ -1146,6 +1183,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help add` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Add(AddArgs),
     /// Remove dependencies from the project.
     ///
@@ -1170,8 +1208,10 @@ pub enum ProjectCommand {
         after_help = "Use `uv help remove` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Remove(RemoveArgs),
     /// Read or update the project's version.
+    #[cfg(feature = "project")]
     Version(VersionArgs),
     /// Update the project's environment.
     ///
@@ -1198,6 +1238,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help sync` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Sync(SyncArgs),
     /// Update the project's lockfile.
     ///
@@ -1210,6 +1251,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help lock` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Lock(LockArgs),
     /// Upgrade a dependency in the project.
     #[command(hide = true)]
@@ -1231,8 +1273,10 @@ pub enum ProjectCommand {
         after_help = "Use `uv help export` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Export(ExportArgs),
     /// Display the project's dependency tree.
+    #[cfg(feature = "project")]
     Tree(TreeArgs),
     /// Format Python code in the project.
     ///
@@ -1248,6 +1292,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help format` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Format(FormatArgs),
     /// Run checks on the project.
     ///
@@ -1259,6 +1304,7 @@ pub enum ProjectCommand {
         after_help = "Use `uv help check` for more details.",
         after_long_help = ""
     )]
+    #[cfg(feature = "project")]
     Check(CheckArgs),
     /// Audit the project's dependencies.
     ///
@@ -1268,6 +1314,7 @@ pub enum ProjectCommand {
     /// By default, all extras and groups within the project are audited. To exclude extras
     /// and/or groups from the audit, use the `--no-extra`, `--no-group`, and related
     /// options.
+    #[cfg(feature = "audit")]
     #[command(
         after_help = "Use `uv help audit` for more details.",
         after_long_help = ""
@@ -3350,6 +3397,7 @@ pub enum AuthorFrom {
     None,
 }
 
+#[cfg(feature = "init")]
 #[derive(Args)]
 pub struct InitArgs {
     /// The path to use for the project/script.
@@ -4994,6 +5042,7 @@ pub struct FormatArgs {
     pub show_version: bool,
 }
 
+#[cfg(feature = "project")]
 #[derive(Args)]
 pub struct CheckArgs {
     /// Apply safe fixes to resolve type-checking errors.
@@ -5176,6 +5225,7 @@ pub struct CheckArgs {
     pub refresh: RefreshArgs,
 }
 
+#[cfg(feature = "audit")]
 #[derive(Args)]
 #[group(skip)]
 pub struct AuditCommonArgs {
@@ -5221,6 +5271,7 @@ pub struct AuditCommonArgs {
     pub service_url: Option<DisplaySafeUrl>,
 }
 
+#[cfg(feature = "audit")]
 #[derive(Args)]
 pub struct AuditArgs {
     /// Don't audit the specified optional dependencies.
@@ -5350,12 +5401,14 @@ pub enum AuthCommand {
     Helper(AuthHelperArgs),
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolNamespace {
     #[command(subcommand)]
     pub command: ToolCommand,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Subcommand)]
 pub enum ToolCommand {
     /// Run a command provided by a Python package.
@@ -5416,6 +5469,7 @@ pub enum ToolCommand {
     #[command(alias = "ls")]
     List(ToolListArgs),
     /// Audit installed tools and their dependencies.
+    #[cfg(feature = "audit")]
     Audit(ToolAuditArgs),
     /// Uninstall a tool.
     Uninstall(ToolUninstallArgs),
@@ -5444,6 +5498,7 @@ pub enum ToolCommand {
     Dir(ToolDirArgs),
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolRunArgs {
     /// The command to run.
@@ -5628,6 +5683,7 @@ pub struct ToolRunArgs {
     pub generate_shell_completion: Option<clap_complete_command::Shell>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct UvxArgs {
     #[command(flatten)]
@@ -5638,6 +5694,7 @@ pub struct UvxArgs {
     pub version: Option<bool>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolInstallArgs {
     /// The package to install commands from.
@@ -5818,6 +5875,7 @@ pub struct ToolInstallArgs {
     pub torch_backend: Option<TorchMode>,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolListArgs {
     /// Whether to display the path to each tool environment and installed executable.
@@ -5861,6 +5919,7 @@ pub struct ToolListArgs {
     pub no_python_downloads: bool,
 }
 
+#[cfg(all(feature = "tool", feature = "audit"))]
 #[derive(Args)]
 pub struct ToolAuditArgs {
     /// The names of the installed tools to audit.
@@ -5893,6 +5952,7 @@ pub struct ToolDirArgs {
     pub bin: bool,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolUninstallArgs {
     /// The name of the tool to uninstall.
@@ -5904,6 +5964,7 @@ pub struct ToolUninstallArgs {
     pub all: bool,
 }
 
+#[cfg(feature = "tool")]
 #[derive(Args)]
 pub struct ToolUpgradeArgs {
     /// The name of the tool to upgrade, along with an optional version specifier.
@@ -6072,6 +6133,7 @@ pub enum PythonCommand {
     /// Multiple Python versions may be requested.
     ///
     /// See `uv help python` to view supported request formats.
+    #[cfg(feature = "python-managed")]
     Install(PythonInstallArgs),
 
     /// Upgrade installed Python versions.
@@ -6091,6 +6153,7 @@ pub enum PythonCommand {
     /// upgrades, the environment must be recreated.
     ///
     /// Upgrades are not yet supported for alternative implementations, like PyPy.
+    #[cfg(feature = "python-managed")]
     Upgrade(PythonUpgradeArgs),
 
     /// Search for a Python installation.
@@ -6110,6 +6173,7 @@ pub enum PythonCommand {
     /// error.
     ///
     /// See `uv help python` to view supported request formats.
+    #[cfg(feature = "python-managed")]
     Pin(PythonPinArgs),
 
     /// Show the uv Python installation directory.
@@ -6122,9 +6186,11 @@ pub enum PythonCommand {
     ///
     /// To view the directory where uv installs Python executables instead, use the `--bin` flag.
     /// The Python executable directory may be overridden with `$UV_PYTHON_BIN_DIR`.
+    #[cfg(feature = "python-managed")]
     Dir(PythonDirArgs),
 
     /// Uninstall Python versions.
+    #[cfg(feature = "python-managed")]
     Uninstall(PythonUninstallArgs),
 
     /// Ensure that the Python executable directory is on the `PATH`.
@@ -6137,6 +6203,7 @@ pub enum PythonCommand {
     ///
     /// The Python executable directory is determined according to the XDG standard and can be
     /// retrieved with `uv python dir --bin`.
+    #[cfg(feature = "python-managed")]
     #[command(alias = "ensurepath")]
     UpdateShell,
 }
@@ -6193,6 +6260,7 @@ pub struct PythonListArgs {
     pub python_downloads_json_url: Option<String>,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonDirArgs {
     /// Show the directory into which `uv python` will install Python executables.
@@ -6208,6 +6276,7 @@ pub struct PythonDirArgs {
     pub bin: bool,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonInstallCompileBytecodeArgs {
     /// Compile Python's standard library to bytecode after installation.
@@ -6238,6 +6307,7 @@ pub struct PythonInstallCompileBytecodeArgs {
     pub no_compile_bytecode: bool,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonInstallArgs {
     /// The directory to store the Python installation in.
@@ -6364,6 +6434,7 @@ pub struct PythonInstallArgs {
     pub compile_bytecode: PythonInstallCompileBytecodeArgs,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonInstallArgs {
     #[must_use]
     pub fn install_mirrors(&self) -> PythonInstallMirrors {
@@ -6375,6 +6446,7 @@ impl PythonInstallArgs {
     }
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonUpgradeArgs {
     /// The directory Python installations are stored in.
@@ -6427,6 +6499,7 @@ pub struct PythonUpgradeArgs {
     pub compile_bytecode: PythonInstallCompileBytecodeArgs,
 }
 
+#[cfg(feature = "python-managed")]
 impl PythonUpgradeArgs {
     #[must_use]
     pub fn install_mirrors(&self) -> PythonInstallMirrors {
@@ -6438,6 +6511,7 @@ impl PythonUpgradeArgs {
     }
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonUninstallArgs {
     /// The directory where the Python was installed.
@@ -6519,6 +6593,7 @@ pub struct PythonFindArgs {
     pub python_downloads_json_url: Option<String>,
 }
 
+#[cfg(feature = "python-managed")]
 #[derive(Args)]
 pub struct PythonPinArgs {
     /// The Python version request.
@@ -7602,6 +7677,7 @@ pub struct DisplayTreeArgs {
     pub show_sizes: bool,
 }
 
+#[cfg(feature = "publish")]
 #[derive(Args, Debug)]
 pub struct PublishArgs {
     /// Paths to the files to upload. Accepts glob expressions.

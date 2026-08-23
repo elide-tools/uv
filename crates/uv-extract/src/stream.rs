@@ -181,7 +181,7 @@ pub async fn unzip<R: tokio::io::AsyncRead + Unpin>(
                     } else {
                         tokio::io::BufWriter::new(file)
                     };
-                    let mut reader = entry.reader_mut().compat();
+                    let mut reader = FuturesAsyncReadCompatExt::compat(entry.reader_mut());
                     let bytes_read = tokio::io::copy(&mut reader, &mut writer)
                         .await
                         .map_err(Error::io_or_zip)?;

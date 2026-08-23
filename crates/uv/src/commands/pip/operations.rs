@@ -45,6 +45,7 @@ use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
     Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
 };
+#[cfg(feature = "tool")]
 use uv_tool::InstalledTools;
 use uv_types::{BuildContext, HashStrategy, InFlight, InstalledPackagesProvider};
 use uv_warnings::warn_user;
@@ -157,7 +158,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         concurrency.downloads_semaphore.clone(),
                     ),
                 )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .with_reporter(Arc::new(
+                    ResolverReporter::from(printer).without_embedded_root(),
+                ))
                 .resolve(unnamed.into_iter())
                 .await?,
             );
@@ -175,7 +178,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     concurrency.downloads_semaphore.clone(),
                 ),
             )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .with_reporter(Arc::new(
+                ResolverReporter::from(printer).without_embedded_root(),
+            ))
             .resolve(source_trees.iter())
             .await?;
 
@@ -293,7 +298,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         concurrency.downloads_semaphore.clone(),
                     ),
                 )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .with_reporter(Arc::new(
+                    ResolverReporter::from(printer).without_embedded_root(),
+                ))
                 .resolve(unnamed.into_iter())
                 .await?,
             );
@@ -335,7 +342,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     concurrency.downloads_semaphore.clone(),
                 ),
             )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .with_reporter(Arc::new(
+                ResolverReporter::from(printer).without_embedded_root(),
+            ))
             .resolve(&resolver_env)
             .await?;
             hasher = updated_hasher;
@@ -1139,6 +1148,10 @@ pub(crate) fn report_interpreter(
     dimmed: bool,
     printer: Printer,
 ) -> Result<(), Error> {
+    if crate::embedded_progress::has_progress_sink() {
+        return Ok(());
+    }
+
     let managed = python.source().is_managed();
     let implementation = python.implementation();
     let interpreter = python.interpreter();
@@ -1231,6 +1244,7 @@ pub(crate) fn report_target_environment(
     }
 
     // Do not report tool environments
+    #[cfg(feature = "tool")]
     if let Ok(tools) = InstalledTools::from_settings() {
         if target.starts_with(tools.root()) {
             debug!("{}", message);

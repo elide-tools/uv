@@ -19,6 +19,7 @@ use serde::de::SeqAccess;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tracing::instrument;
+#[cfg(feature = "build-backend")]
 use uv_build_backend::BuildBackendSettings;
 use uv_configuration::{ExcludeDependency, GitLfsSetting, Override};
 use uv_distribution_types::{Index, IndexName, RequirementSource};
@@ -1974,27 +1975,61 @@ impl<'de> Deserialize<'de> for BuildBackendSettingsSchema {
 #[cfg(feature = "schemars")]
 impl schemars::JsonSchema for BuildBackendSettingsSchema {
     fn schema_name() -> Cow<'static, str> {
-        BuildBackendSettings::schema_name()
+        #[cfg(feature = "build-backend")]
+        {
+            BuildBackendSettings::schema_name()
+        }
+        #[cfg(not(feature = "build-backend"))]
+        {
+            Cow::Borrowed("BuildBackendSettings")
+        }
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        BuildBackendSettings::json_schema(generator)
+        #[cfg(feature = "build-backend")]
+        {
+            BuildBackendSettings::json_schema(generator)
+        }
+        #[cfg(not(feature = "build-backend"))]
+        {
+            let _ = generator;
+            schemars::json_schema!({})
+        }
     }
 }
 
 impl OptionsMetadata for BuildBackendSettingsSchema {
     fn record(visit: &mut dyn Visit) {
+        #[cfg(feature = "build-backend")]
         BuildBackendSettings::record(visit);
+        #[cfg(not(feature = "build-backend"))]
+        let _ = visit;
     }
 
     fn documentation() -> Option<&'static str> {
-        BuildBackendSettings::documentation()
+        #[cfg(feature = "build-backend")]
+        {
+            BuildBackendSettings::documentation()
+        }
+        #[cfg(not(feature = "build-backend"))]
+        {
+            None
+        }
     }
 
     fn metadata() -> OptionSet
     where
         Self: Sized + 'static,
     {
-        BuildBackendSettings::metadata()
+        #[cfg(feature = "build-backend")]
+        {
+            BuildBackendSettings::metadata()
+        }
+        #[cfg(not(feature = "build-backend"))]
+        {
+            // Built from our no-op `record`, so an empty set (no recursion via
+            // `metadata`).
+            OptionSet::of::<Self>()
+        }
     }
 }

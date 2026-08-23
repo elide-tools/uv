@@ -5,17 +5,26 @@ use uv_platform_tags::{Tags, TagsError, TagsOptions};
 use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_python::{Interpreter, PythonVersion};
 
+#[cfg(feature = "pip")]
 pub(crate) mod check;
+#[cfg(feature = "pip")]
 pub(crate) mod compile;
+#[cfg(feature = "pip")]
 pub(crate) mod freeze;
+#[cfg(feature = "pip")]
 pub(crate) mod install;
 pub(crate) mod latest;
+#[cfg(feature = "pip")]
 pub(crate) mod list;
 pub(crate) mod loggers;
 pub(crate) mod operations;
+#[cfg(feature = "pip")]
 pub(crate) mod show;
+#[cfg(feature = "pip")]
 pub(crate) mod sync;
+#[cfg(feature = "pip")]
 pub(crate) mod tree;
+#[cfg(feature = "pip")]
 pub(crate) mod uninstall;
 
 pub(crate) fn resolution_markers(

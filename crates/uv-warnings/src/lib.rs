@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::AtomicBool;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 // macro hygiene: The user might not have direct dependencies on those crates
 #[doc(hidden)]
@@ -13,6 +13,33 @@ use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 
 /// Whether user-facing warnings are enabled.
 pub static ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub trait WarningSink: Send + Sync + 'static {
+    fn warning(&self, message: &str);
+}
+
+static ACTIVE_WARNING_SINK: LazyLock<Mutex<Option<Arc<dyn WarningSink>>>> =
+    LazyLock::new(Mutex::default);
+
+pub struct WarningSinkGuard {
+    previous: Option<Arc<dyn WarningSink>>,
+}
+
+impl Drop for WarningSinkGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = ACTIVE_WARNING_SINK.lock() {
+            *guard = self.previous.take();
+        }
+    }
+}
+
+pub fn install_warning_sink(sink: Arc<dyn WarningSink>) -> WarningSinkGuard {
+    let previous = ACTIVE_WARNING_SINK
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.replace(sink));
+    WarningSinkGuard { previous }
+}
 
 /// Enable user-facing warnings.
 pub fn enable() {
@@ -43,17 +70,36 @@ fn write_warning_chain_with_options<C, W: fmt::Write>(
     )
 }
 
+pub fn emit_warning(message: &str) {
+    use owo_colors::OwoColorize;
+
+    let formatted = format!(
+        "{}{} {}",
+        "warning".yellow().bold(),
+        ":".bold(),
+        message.bold()
+    );
+    if ACTIVE_WARNING_SINK
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .map(|sink| sink.warning(&formatted))
+        .is_some()
+    {
+        return;
+    }
+    anstream::eprintln!("{formatted}");
+}
+
 /// Warn a user, if warnings are enabled.
 #[macro_export]
 macro_rules! warn_user {
     ($($arg:tt)*) => {{
-        use $crate::anstream::eprintln;
         use $crate::owo_colors::OwoColorize;
 
         if $crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
             let message = format!("{}", format_args!($($arg)*));
-            let formatted = message.bold();
-            eprintln!("{}{} {formatted}", "warning".yellow().bold(), ":".bold());
+            $crate::emit_warning(&message);
         }
     }};
 }
@@ -65,14 +111,13 @@ pub static WARNINGS: LazyLock<Mutex<FxHashSet<String>>> = LazyLock::new(Mutex::d
 #[macro_export]
 macro_rules! warn_user_once {
     ($($arg:tt)*) => {{
-        use $crate::anstream::eprintln;
         use $crate::owo_colors::OwoColorize;
 
         if $crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
             if let Ok(mut states) = $crate::WARNINGS.lock() {
                 let message = format!("{}", format_args!($($arg)*));
                 if states.insert(message.clone()) {
-                    eprintln!("{}{} {}", "warning".yellow().bold(), ":".bold(), message.bold());
+                    $crate::emit_warning(&message);
                 }
             }
         }

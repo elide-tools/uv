@@ -13,9 +13,9 @@ use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
-use crate::providers::{
-    AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, S3EndpointProvider,
-};
+use crate::providers::HuggingFaceProvider;
+#[cfg(feature = "cloud-auth")]
+use crate::providers::{AzureEndpointProvider, GcsEndpointProvider, S3EndpointProvider};
 use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
 use crate::{
     AccessToken, CredentialsCache, KeyringProvider,
@@ -152,6 +152,7 @@ enum TokenState {
     Initialized(Option<AccessToken>),
 }
 
+#[cfg(feature = "cloud-auth")]
 #[derive(Clone)]
 enum S3CredentialState {
     /// The S3 credential state has not yet been initialized.
@@ -161,6 +162,7 @@ enum S3CredentialState {
     Initialized(Option<Arc<Authentication>>),
 }
 
+#[cfg(feature = "cloud-auth")]
 #[derive(Clone)]
 enum GcsCredentialState {
     /// The GCS credential state has not yet been initialized.
@@ -170,6 +172,7 @@ enum GcsCredentialState {
     Initialized(Option<Arc<Authentication>>),
 }
 
+#[cfg(feature = "cloud-auth")]
 #[derive(Clone)]
 enum AzureCredentialState {
     /// The Azure credential state has not yet been initialized.
@@ -201,10 +204,13 @@ pub struct AuthMiddleware {
     /// Tokens to use for persistent credentials.
     pyx_token_state: Mutex<TokenState>,
     /// Cached S3 credentials to avoid running the credential helper multiple times.
+    #[cfg(feature = "cloud-auth")]
     s3_credential_state: Mutex<S3CredentialState>,
     /// Cached GCS credentials to avoid running the credential helper multiple times.
+    #[cfg(feature = "cloud-auth")]
     gcs_credential_state: Mutex<GcsCredentialState>,
     /// Cached Azure credentials to avoid running the credential helper multiple times.
+    #[cfg(feature = "cloud-auth")]
     azure_credential_state: Mutex<AzureCredentialState>,
     preview: Preview,
 }
@@ -228,8 +234,11 @@ impl AuthMiddleware {
             base_client: None,
             pyx_token_store: None,
             pyx_token_state: Mutex::new(TokenState::Uninitialized),
+            #[cfg(feature = "cloud-auth")]
             s3_credential_state: Mutex::new(S3CredentialState::Uninitialized),
+            #[cfg(feature = "cloud-auth")]
             gcs_credential_state: Mutex::new(GcsCredentialState::Uninitialized),
+            #[cfg(feature = "cloud-auth")]
             azure_credential_state: Mutex::new(AzureCredentialState::Uninitialized),
             preview: Preview::default(),
         }
@@ -703,10 +712,13 @@ impl AuthMiddleware {
         index: Option<&Index>,
         auth_policy: AuthPolicy,
     ) -> reqwest_middleware::Result<Option<Arc<Authentication>>> {
+        #[cfg(feature = "cloud-auth")]
         let is_s3_endpoint =
             S3EndpointProvider::is_s3_endpoint(url, self.preview).map_err(Error::Middleware)?;
+        #[cfg(feature = "cloud-auth")]
         let is_gcs_endpoint =
             GcsEndpointProvider::is_gcs_endpoint(url, self.preview).map_err(Error::Middleware)?;
+        #[cfg(feature = "cloud-auth")]
         let is_azure_endpoint = AzureEndpointProvider::is_azure_endpoint(url, self.preview)
             .map_err(Error::Middleware)?;
         let username = Username::from(
@@ -743,69 +755,72 @@ impl AuthMiddleware {
             return Ok(Some(credentials));
         }
 
-        if is_s3_endpoint {
-            let mut s3_state = self.s3_credential_state.lock().await;
+        #[cfg(feature = "cloud-auth")]
+        {
+            if is_s3_endpoint {
+                let mut s3_state = self.s3_credential_state.lock().await;
 
-            // If the S3 credential state is uninitialized, initialize it.
-            let credentials = match &*s3_state {
-                S3CredentialState::Uninitialized => {
-                    trace!("Initializing S3 credentials for {url}");
-                    let signer = S3EndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *s3_state = S3CredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
+                // If the S3 credential state is uninitialized, initialize it.
+                let credentials = match &*s3_state {
+                    S3CredentialState::Uninitialized => {
+                        trace!("Initializing S3 credentials for {url}");
+                        let signer = S3EndpointProvider::create_signer();
+                        let credentials = Arc::new(Authentication::from(signer));
+                        *s3_state = S3CredentialState::Initialized(Some(credentials.clone()));
+                        Some(credentials)
+                    }
+                    S3CredentialState::Initialized(credentials) => credentials.clone(),
+                };
+
+                if let Some(credentials) = credentials {
+                    debug!("Found S3 credentials for {url}");
+                    self.cache().fetches.done(key, Some(credentials.clone()));
+                    return Ok(Some(credentials));
                 }
-                S3CredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found S3 credentials for {url}");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
             }
-        }
 
-        if is_gcs_endpoint {
-            let mut gcs_state = self.gcs_credential_state.lock().await;
+            if is_gcs_endpoint {
+                let mut gcs_state = self.gcs_credential_state.lock().await;
 
-            // If the GCS credential state is uninitialized, initialize it.
-            let credentials = match &*gcs_state {
-                GcsCredentialState::Uninitialized => {
-                    trace!("Initializing GCS credentials for {url}");
-                    let signer = GcsEndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *gcs_state = GcsCredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
+                // If the GCS credential state is uninitialized, initialize it.
+                let credentials = match &*gcs_state {
+                    GcsCredentialState::Uninitialized => {
+                        trace!("Initializing GCS credentials for {url}");
+                        let signer = GcsEndpointProvider::create_signer();
+                        let credentials = Arc::new(Authentication::from(signer));
+                        *gcs_state = GcsCredentialState::Initialized(Some(credentials.clone()));
+                        Some(credentials)
+                    }
+                    GcsCredentialState::Initialized(credentials) => credentials.clone(),
+                };
+
+                if let Some(credentials) = credentials {
+                    debug!("Found GCS credentials for {url}");
+                    self.cache().fetches.done(key, Some(credentials.clone()));
+                    return Ok(Some(credentials));
                 }
-                GcsCredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found GCS credentials for {url}");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
             }
-        }
 
-        if is_azure_endpoint {
-            let mut azure_state = self.azure_credential_state.lock().await;
+            if is_azure_endpoint {
+                let mut azure_state = self.azure_credential_state.lock().await;
 
-            // If the Azure credential state is uninitialized, initialize it.
-            let credentials = match &*azure_state {
-                AzureCredentialState::Uninitialized => {
-                    trace!("Initializing Azure credentials for {url}");
-                    let signer = AzureEndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *azure_state = AzureCredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
+                // If the Azure credential state is uninitialized, initialize it.
+                let credentials = match &*azure_state {
+                    AzureCredentialState::Uninitialized => {
+                        trace!("Initializing Azure credentials for {url}");
+                        let signer = AzureEndpointProvider::create_signer();
+                        let credentials = Arc::new(Authentication::from(signer));
+                        *azure_state = AzureCredentialState::Initialized(Some(credentials.clone()));
+                        Some(credentials)
+                    }
+                    AzureCredentialState::Initialized(credentials) => credentials.clone(),
+                };
+
+                if let Some(credentials) = credentials {
+                    debug!("Found Azure credentials for {url}");
+                    self.cache().fetches.done(key, Some(credentials.clone()));
+                    return Ok(Some(credentials));
                 }
-                AzureCredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found Azure credentials for {url}");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
             }
         }
 

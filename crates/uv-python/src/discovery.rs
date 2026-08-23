@@ -14,6 +14,7 @@ use tracing::{debug, instrument, trace};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_distribution_types::RequiresPython;
+#[cfg(feature = "python-managed")]
 use uv_errors::Hints;
 use uv_fs::Simplified;
 use uv_fs::which::is_executable;
@@ -22,10 +23,14 @@ use uv_pep440::{
     release_specifiers_to_ranges,
 };
 use uv_static::EnvVars;
-use uv_warnings::{warn_user_once, write_warning_chain};
+use uv_warnings::warn_user_once;
+#[cfg(feature = "python-managed")]
+use uv_warnings::write_warning_chain;
 use which::{which, which_all};
 
-use crate::downloads::{ManagedPythonDownloadList, PlatformRequest, PythonDownloadRequest};
+#[cfg(feature = "python-managed")]
+use crate::downloads::ManagedPythonDownloadList;
+use crate::downloads::{PlatformRequest, PythonDownloadRequest};
 use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::interpreter::Error as InterpreterError;
@@ -1548,6 +1553,10 @@ pub(crate) fn find_python_installation(
 ///
 /// See [`find_python_installation`] for more details on installation discovery.
 #[instrument(skip_all, fields(request))]
+#[cfg_attr(
+    not(feature = "python-managed"),
+    allow(unused_variables, unused_mut, dead_code)
+)]
 pub(crate) async fn find_best_python_installation(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1563,7 +1572,9 @@ pub(crate) async fn find_best_python_installation(
     debug!("Starting Python discovery for {request}");
     let original_request = request;
 
+    #[cfg(feature = "python-managed")]
     let mut previous_fetch_failed = false;
+    #[cfg(feature = "python-managed")]
     let mut download_state = None;
 
     let request_without_patch = match request {
@@ -1605,7 +1616,12 @@ pub(crate) async fn find_best_python_installation(
             Err(error) => return Err(error.into()),
         };
 
-        // Attempt to download the version if downloads are enabled
+        // Attempt to download the version if downloads are enabled.
+        // This block is only compiled when the `python-managed` feature is active;
+        // when the feature is off, `downloads_enabled` is always `false` from the
+        // caller so this path is dead code anyway, but the explicit cfg keeps the
+        // compile surface clean.
+        #[cfg(feature = "python-managed")]
         if downloads_enabled
             && !previous_fetch_failed
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
@@ -1699,6 +1715,7 @@ pub(crate) async fn find_best_python_installation(
 }
 
 /// Display a warning if the Python version of the [`Interpreter`] is unsupported by uv.
+#[cfg_attr(not(feature = "python-managed"), allow(dead_code))]
 fn warn_on_unsupported_python(interpreter: &Interpreter) {
     // Warn on usage with an unsupported Python version
     if interpreter.python_tuple() < (3, 8) {
@@ -2529,6 +2546,7 @@ impl PythonPreference {
         }
     }
 
+    #[cfg_attr(not(feature = "python-managed"), allow(dead_code))]
     pub(crate) fn allows_managed(self) -> bool {
         match self {
             Self::OnlySystem => false,
@@ -3298,6 +3316,7 @@ impl VersionRequest {
     }
 
     /// Whether a patch version segment is present in the request.
+    #[cfg_attr(not(feature = "python-managed"), allow(dead_code))]
     fn has_patch(&self) -> bool {
         match self {
             Self::Any | Self::Default => false,

@@ -3,33 +3,41 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
+#[cfg(feature = "python-managed")]
 use indexmap::IndexMap;
 use ref_cast::RefCast;
+#[cfg(feature = "python-managed")]
 use reqwest_retry::policies::ExponentialBackoff;
-use tracing::{debug, info};
+use tracing::debug;
+#[cfg(feature = "python-managed")]
+use tracing::info;
 use uv_fs::Simplified;
 use uv_warnings::warn_user;
 
 use uv_cache::Cache;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
-use uv_client::{BaseClient, BaseClientBuilder};
+#[cfg(feature = "python-managed")]
+use uv_client::BaseClient;
+use uv_client::BaseClientBuilder;
 use uv_pep440::{Prerelease, Version};
 use uv_platform::{Arch, Libc, Os, Platform};
 
+use crate::discovery::find_best_python_installation;
 use crate::discovery::{
-    EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
-    find_python_installation,
+    EnvironmentPreference, PythonRequest, VersionRequest, find_python_installation,
 };
-use crate::downloads::{
-    DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
-    Reporter,
-};
+#[cfg(feature = "python-managed")]
+use crate::downloads::{DownloadResult, ManagedPythonDownload};
+use crate::downloads::{ManagedPythonDownloadList, PythonDownloadRequest, Reporter};
 use crate::implementation::LenientImplementationName;
+#[cfg(feature = "python-managed")]
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
 use crate::{
-    Error, ImplementationName, Interpreter, MissingPythonHint, PythonDownloads, PythonPreference,
-    PythonSource, PythonVariant, PythonVersion, downloads,
+    Error, ImplementationName, Interpreter, PythonDownloads, PythonPreference, PythonSource,
+    PythonVariant, PythonVersion,
 };
+#[cfg(feature = "python-managed")]
+use crate::{MissingPythonHint, downloads};
 
 /// A Python interpreter and accompanying tools.
 #[derive(Clone, Debug)]
@@ -133,6 +141,10 @@ impl PythonInstallation {
 
     /// Find or download a [`PythonInstallation`] that satisfies a requested version, if the request
     /// cannot be satisfied, fallback to the best available Python installation.
+    ///
+    /// Requires the `python-managed` feature; when that feature is disabled this method
+    /// behaves like [`PythonInstallation::find`] and never attempts a download.
+    #[cfg(feature = "python-managed")]
     pub async fn find_best(
         request: &PythonRequest,
         environments: EnvironmentPreference,
@@ -172,9 +184,46 @@ impl PythonInstallation {
         Ok(installation)
     }
 
+    /// Stub for `find_best` when the `python-managed` feature is disabled.
+    ///
+    /// Only performs local discovery; never downloads a Python distribution.
+    #[cfg(not(feature = "python-managed"))]
+    pub async fn find_best(
+        request: &PythonRequest,
+        environments: EnvironmentPreference,
+        preference: PythonPreference,
+        _python_downloads: PythonDownloads,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        reporter: Option<&dyn Reporter>,
+        python_install_mirror: Option<&str>,
+        pypy_install_mirror: Option<&str>,
+        python_downloads_json_url: Option<&str>,
+    ) -> Result<Self, Error> {
+        // `downloads_enabled: false` keeps discovery from reaching the download paths, and
+        // skipping the prerelease warning avoids loading the download list at all.
+        Ok(find_best_python_installation(
+            request,
+            environments,
+            preference,
+            false,
+            client_builder,
+            cache,
+            reporter,
+            python_install_mirror,
+            pypy_install_mirror,
+            python_downloads_json_url,
+        )
+        .await?)
+    }
+
     /// Find or fetch a [`PythonInstallation`].
     ///
     /// Unlike [`PythonInstallation::find`], if the required Python is not installed it will be installed automatically.
+    ///
+    /// Requires the `python-managed` feature; when that feature is disabled this method
+    /// performs only local discovery and never downloads a Python distribution.
+    #[cfg(feature = "python-managed")]
     pub async fn find_or_download(
         request: Option<&PythonRequest>,
         environments: EnvironmentPreference,
@@ -314,7 +363,39 @@ impl PythonInstallation {
         Ok(installation)
     }
 
+    /// Stub for `find_or_download` when the `python-managed` feature is disabled.
+    ///
+    /// Only performs local discovery; never downloads a Python distribution.
+    #[cfg(not(feature = "python-managed"))]
+    pub async fn find_or_download(
+        request: Option<&PythonRequest>,
+        environments: EnvironmentPreference,
+        preference: PythonPreference,
+        _python_downloads: PythonDownloads,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        _reporter: Option<&dyn Reporter>,
+        _python_install_mirror: Option<&str>,
+        _pypy_install_mirror: Option<&str>,
+        python_downloads_json_url: Option<&str>,
+    ) -> Result<Self, Error> {
+        let request = request.unwrap_or(&PythonRequest::Default);
+        let installation = Self::find_existing(request, environments, preference, cache)?;
+        installation
+            .download_and_warn_if_outdated_prerelease(
+                request,
+                client_builder,
+                cache,
+                python_downloads_json_url,
+            )
+            .await?;
+        Ok(installation)
+    }
+
     /// Download and install the requested installation.
+    ///
+    /// Requires the `python-managed` feature.
+    #[cfg(feature = "python-managed")]
     pub(crate) async fn fetch(
         download: &ManagedPythonDownload,
         client: &BaseClient,
@@ -818,6 +899,9 @@ impl PythonInstallationMinorVersionKey {
     /// Takes an [`IntoIterator`] of [`ManagedPythonInstallation`]s and returns an [`FxHashMap`] from
     /// [`PythonInstallationMinorVersionKey`] to the installation with highest [`PythonInstallationKey`]
     /// for that minor version key.
+    ///
+    /// Requires the `python-managed` feature.
+    #[cfg(feature = "python-managed")]
     #[inline]
     pub fn highest_installations_by_minor_version_key<'a, I>(
         installations: I,
