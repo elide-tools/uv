@@ -471,8 +471,18 @@ def get_operating_system_and_architecture():
             elif architecture == "aarch64":
                 architecture = "armv8l"
 
-        musl_version = _get_musl_version(sys.executable)
-        glibc_version = _get_glibc_version()
+        if sys.implementation.name == "graalpy" and architecture == "x86_64":
+            # Elide ships its embedded GraalPy as a fully-static musl binary on
+            # linux amd64: there's no PT_INTERP for `_get_musl_version` to read
+            # and the static image can't run the glibc ctypes probe (no dynamic
+            # loader, so `import ctypes`/`CDLL(None)` can't bootstrap `dlopen`).
+            # The libc is musl here, so report musllinux directly and skip both
+            # probes. arm64 ships glibc, so it falls through to normal detection.
+            musl_version = (1, 2)
+            glibc_version = (-1, -1)
+        else:
+            musl_version = _get_musl_version(sys.executable)
+            glibc_version = _get_glibc_version()
 
         if musl_version:
             operating_system = {
@@ -492,6 +502,18 @@ def get_operating_system_and_architecture():
             operating_system = {
                 "name": "android",
                 "api_level": sys.getandroidapilevel(),
+            }
+        elif sys.implementation.name == "graalpy":
+            # Elide-fork: this uv is embedded in Elide, whose GraalPy runs inside
+            # a static (`+crt-static`) musl binary. `sys.executable` then carries
+            # no PT_INTERP for the musl probe above, and the host libc may be
+            # glibc — so neither libc is detectable from the environment even
+            # though the interpreter is always musllinux. Assume the modern
+            # musllinux baseline (PEP 656) rather than failing the query.
+            operating_system = {
+                "name": "musllinux",
+                "major": 1,
+                "minor": 2,
             }
         else:
             print(json.dumps({"result": "error", "kind": "libc_not_found"}))
