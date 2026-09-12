@@ -312,3 +312,8 @@ required-features = ["windows-gui-bin"]
 
 [lib]
 doctest = false
+
+[[test]]
+name = "embedded_parse"
+path = "tests/embedded_parse.rs"
+harness = false

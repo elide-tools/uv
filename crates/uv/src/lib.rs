@@ -3304,7 +3304,13 @@ where
         Ok(cli) => cli,
         Err(mut err) => {
             suggest_subcommand(&mut err);
-            err.exit()
+            // Match clap's output and exit status without terminating an embedding host.
+            let _ = err.print();
+            return if err.use_stderr() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            };
         }
     };
 
