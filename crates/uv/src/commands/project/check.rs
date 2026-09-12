@@ -8,8 +8,8 @@ use uv_cache::Cache;
 use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
-    InstallOptions,
+    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
+    ExtrasSpecification, InstallOptions,
 };
 use uv_fs::normalize_path;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -175,6 +175,13 @@ pub(crate) async fn check(
         .as_ref()
         .is_some_and(|project| project.project_name().is_none());
     let defacto_all_packages = all_packages || (is_virtual_workspace && package.is_empty());
+    // Running within a project selects that project, even if workspace configuration excludes it.
+    let explicit_targets = all_packages
+        || !package.is_empty()
+        || script.is_some()
+        || project
+            .as_ref()
+            .is_some_and(|project| project.project_name().is_some());
 
     let target_dir = script
         .as_ref()
@@ -295,7 +302,7 @@ pub(crate) async fn check(
                 &install_mirrors,
                 false,
                 config_discovery,
-                Some(false),
+                ActiveEnvironment::Ignore,
                 cache,
                 printer,
             )
@@ -375,7 +382,7 @@ pub(crate) async fn check(
                 &install_mirrors,
                 no_sync,
                 config_discovery,
-                Some(false),
+                ActiveEnvironment::Ignore,
                 cache,
                 DryRun::Disabled,
                 printer,
@@ -511,7 +518,7 @@ pub(crate) async fn check(
                 python_downloads,
                 no_sync,
                 config_discovery,
-                None,
+                ActiveEnvironment::Warn,
                 cache,
                 DryRun::Disabled,
                 LinkErrorReporting::User,
@@ -542,7 +549,7 @@ pub(crate) async fn check(
                     python_downloads,
                     &install_mirrors,
                     ProjectEnvironmentPolicy::Optional,
-                    None,
+                    ActiveEnvironment::Warn,
                     cache,
                     printer,
                 )
@@ -746,6 +753,7 @@ pub(crate) async fn check(
             .map(|project| project.workspace().install_path().as_path()),
         &check_targets,
         &excluded_targets,
+        explicit_targets,
         venv_path.as_deref(),
         exclude_newer,
         show_version,

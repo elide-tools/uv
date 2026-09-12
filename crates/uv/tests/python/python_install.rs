@@ -2588,7 +2588,7 @@ fn python_install_emulated_macos() {
     }
 
     // Before installation, `uv python list` should not show the x86_64 download
-    uv_snapshot!(context.filters(), context.python_list().arg("3.13"), @r"
+    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.13"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.13.[LATEST]-macos-aarch64-none    <download available>
@@ -2610,7 +2610,7 @@ fn python_install_emulated_macos() {
     ");
 
     // And included in `uv python list`
-    uv_snapshot!(context.filters(), context.python_list().arg("3.13"), @r"
+    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.13"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.13.[LATEST]-macos-aarch64-none    <download available>
@@ -2642,7 +2642,7 @@ fn python_install_emulated_windows_x86_on_x64() {
         .with_filtered_latest_python_versions();
 
     // Before installation, `uv python list` should not show the x86_32 download
-    uv_snapshot!(context.filters(), context.python_list().arg("3.13"), @r"
+    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.13"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.13.[LATEST]-windows-x86_64-none    <download available>
@@ -2664,7 +2664,7 @@ fn python_install_emulated_windows_x86_on_x64() {
     ");
 
     // And included in `uv python list`
-    uv_snapshot!(context.filters(), context.python_list().arg("3.13"), @r"
+    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.13"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.13.[LATEST]-windows-x86_64-none    <download available>
@@ -3951,6 +3951,21 @@ fn python_install_upgrade_build_version() {
     ));
     let build_file = installation_dir.join("BUILD");
     fs_err::write(&build_file, "19000101").unwrap();
+    // A build upgrade retains the Python version and installation key, so set the interpreter's
+    // modification time to a known value to detect whether the interpreter is replaced.
+    let python_executable = if cfg!(windows) {
+        installation_dir.join("python.exe")
+    } else {
+        installation_dir.join("bin").join("python3.12")
+    };
+    filetime::set_file_mtime(
+        &python_executable,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )
+    .unwrap();
+    let previous_mtime = filetime::FileTime::from_last_modification_time(
+        &fs_err::metadata(&python_executable).unwrap(),
+    );
 
     // Now upgrade should detect the outdated build version and reinstall
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.12"), @"
@@ -3959,6 +3974,13 @@ fn python_install_upgrade_build_version() {
     Installed Python 3.12.[LATEST] in [TIME]
      ~ cpython-3.12.[LATEST]-[PLATFORM]
     ");
+
+    assert_ne!(
+        filetime::FileTime::from_last_modification_time(
+            &fs_err::metadata(&python_executable).unwrap()
+        ),
+        previous_mtime
+    );
 
     // Should be a no-op again after upgrade
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.12"), @"

@@ -19,6 +19,7 @@ use uv_distribution_types::IndexUrl;
 use uv_errors::{Hint, Hints};
 use uv_git::GitError;
 use uv_normalize::PackageName;
+use uv_pypi_types::HashDigest;
 use uv_redacted::DisplaySafeUrl;
 
 /// RFC 9457 Problem Details for HTTP APIs
@@ -201,11 +202,6 @@ impl Error {
     /// Create a new error from an HTML parsing error.
     pub(crate) fn from_html_err(err: html::Error, url: DisplaySafeUrl) -> Self {
         ErrorKind::BadHtml { source: err, url }.into()
-    }
-
-    /// Create a new error from a `MessagePack` parsing error.
-    pub(crate) fn from_msgpack_err(err: rmp_serde::decode::Error, url: DisplaySafeUrl) -> Self {
-        ErrorKind::BadMessagePack { source: err, url }.into()
     }
 
     /// Create an [`Error`] from a [`reqwest_middleware::Error`].
@@ -444,6 +440,16 @@ pub enum ErrorKind {
     #[error("Local index not found at: `{}`", _0.display())]
     LocalIndexNotFound(PathBuf),
 
+    /// The metadata file does not match a hash provided by its package index.
+    #[error(
+        "Hash mismatch for package metadata at `{url}`\n\nExpected:\n  {expected}\n\nComputed:\n  {actual}"
+    )]
+    MetadataHashMismatch {
+        url: DisplaySafeUrl,
+        expected: HashDigest,
+        actual: HashDigest,
+    },
+
     /// The metadata file could not be parsed.
     #[error("Couldn't parse metadata of {0} from {1}")]
     MetadataParseError(
@@ -468,14 +474,11 @@ pub enum ErrorKind {
         url: DisplaySafeUrl,
     },
 
-    #[error("Received some unexpected MessagePack from {}", url)]
-    BadMessagePack {
-        source: rmp_serde::decode::Error,
-        url: DisplaySafeUrl,
-    },
-
     #[error("Failed to read zip with range requests: `{0}`")]
     AsyncHttpRangeReader(DisplaySafeUrl, #[source] AsyncHttpRangeReaderError),
+
+    #[error("Wheel metadata range requests are required, but not supported for: `{0}`")]
+    MetadataRangeRequestsRequired(DisplaySafeUrl, #[source] Box<Error>),
 
     #[error("{0} is not a valid wheel filename")]
     WheelFilename(#[source] WheelFilenameError),

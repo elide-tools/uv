@@ -15,7 +15,7 @@ on:
         type: string
       runner:
         description: "The runner to use for reproduction"
-        default: ubuntu-latest
+        default: github-ubuntu-24.04-x86_64-4
         required: false
         type: string
     outputs:
@@ -48,14 +48,17 @@ on:
         type: string
       runner:
         description: "The runner to use for reproduction"
-        default: ubuntu-latest
+        default: github-ubuntu-24.04-x86_64-4
         required: true
         type: choice
         options:
-          - ubuntu-latest
+          - github-ubuntu-24.04-x86_64-4
           - macos-latest
 
 permissions: {}
+
+env:
+  UV_LOCKED: 1
 
 jobs:
   reproduce:
@@ -117,7 +120,7 @@ jobs:
           UV_CACHE_DIR: ${{ runner.temp }}/uv-reproduce-cache
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: "0.146.0"
+          codex-version: "0.147.0"
           codex-home: "agents/codex"
           effort: high
           permission-profile: "reproduce-bug"
@@ -147,7 +150,7 @@ jobs:
   report:
     needs: reproduce
     if: needs.reproduce.outputs.result != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 10
     concurrency:
@@ -239,7 +242,7 @@ jobs:
         with:
           enable-cache: false
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
 
@@ -268,7 +271,7 @@ jobs:
           UV_CACHE_DIR: ${{ runner.temp }}/uv-create-test-cache
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: "0.146.0"
+          codex-version: "0.147.0"
           codex-home: "agents/codex"
           effort: high
           permission-profile: "create-bug-test"
@@ -337,7 +340,7 @@ jobs:
   publish-integration-test:
     needs: [reproduce, create-integration-test]
     if: needs.create-integration-test.outputs.created == 'true'
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 10
     permissions:

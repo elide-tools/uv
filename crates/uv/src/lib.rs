@@ -223,6 +223,7 @@ pub(crate) fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBui
         globals.network_settings.connect_timeout,
         globals.network_settings.retries,
     )
+    .metadata_range_request(globals.network_settings.metadata_range_request)
     .cache_read_concurrency(globals.concurrency.cache_reads)
     .http_proxy(globals.network_settings.http_proxy.clone())
     .https_proxy(globals.network_settings.https_proxy.clone())
@@ -274,22 +275,9 @@ impl uv_errors::Hint for ExternallyInstalledError {
     }
 }
 
+#[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
-    Box::pin(run_with_workspace_cache(
-        cli,
-        global_initialization,
-        WorkspaceCache::default(),
-    ))
-    .await
-}
-
-#[instrument(name = "run", skip_all)]
-async fn run_with_workspace_cache(
-    cli: Cli,
-    global_initialization: GlobalInitialization,
-    workspace_cache: WorkspaceCache,
-) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -494,6 +482,7 @@ async fn run_with_workspace_cache(
         cli.top_level.cache_args.no_cache,
         cli.top_level.cache_args.cache_dir.clone(),
     )?;
+    let workspace_cache = WorkspaceCache::default();
     let filesystem = if let Some(config_file) = cli.top_level.config_file.as_ref() {
         if config_file
             .file_name()
@@ -858,7 +847,6 @@ async fn run_with_workspace_cache(
                 args.username,
                 args.password,
                 args.token,
-                client_builder,
                 printer,
                 globals.preview,
             )
@@ -872,14 +860,7 @@ async fn run_with_workspace_cache(
             let args = settings::AuthLogoutSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_logout(
-                args.service,
-                args.username,
-                client_builder,
-                printer,
-                globals.preview,
-            )
-            .await
+            commands::auth_logout(args.service, args.username, printer, globals.preview).await
         }
         #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
@@ -889,20 +870,13 @@ async fn run_with_workspace_cache(
             let args = settings::AuthTokenSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_token(
-                args.service,
-                args.username,
-                client_builder,
-                printer,
-                globals.preview,
-            )
-            .await
+            commands::auth_token(args.service, args.username, printer, globals.preview).await
         }
         #[cfg(feature = "auth")]
         Commands::Auth(AuthNamespace {
-            command: AuthCommand::Dir(args),
+            command: AuthCommand::Dir,
         }) => {
-            commands::auth_dir(args.service.as_ref(), printer)?;
+            commands::auth_dir(printer)?;
             Ok(ExitStatus::Success)
         }
         #[cfg(feature = "auth")]
@@ -917,9 +891,7 @@ async fn run_with_workspace_cache(
             }
 
             match args.command {
-                AuthHelperCommand::Get => {
-                    commands::auth_helper(client_builder, globals.preview, printer).await
-                }
+                AuthHelperCommand::Get => commands::auth_helper(globals.preview, printer).await,
             }
         }
         Commands::Help(args) => commands::help(
@@ -2294,7 +2266,6 @@ async fn run_with_workspace_cache(
                 password,
                 dry_run,
                 no_attestations,
-                direct,
                 publish_url,
                 trusted_publishing,
                 keyring_provider,
@@ -2317,8 +2288,6 @@ async fn run_with_workspace_cache(
                 index_locations,
                 dry_run,
                 no_attestations,
-                direct,
-                globals.preview,
                 &cache,
                 printer,
             )
@@ -3347,12 +3316,6 @@ where
         cli.top_level.global_args.no_progress,
     );
 
-    // Initialize the cache before spawning `main2`. Constructing its `papaya` map initializes
-    // `seize`, which registers a process-wide memory barrier on Linux. Once multiple threads share
-    // the address space, registration waits for an RCU (read-copy-update) grace period; while the
-    // process is single-threaded, it takes the kernel's inexpensive fast path instead.
-    let workspace_cache = WorkspaceCache::default();
-
     // Process-global state (flags, preview configuration, the open-file limit, the tracing
     // subscriber and the miette hook) can only be initialized once, and upstream errors on a
     // second attempt. An embedding host can call this entry point more than once per process, so
@@ -3373,11 +3336,7 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run_with_workspace_cache(
-            cli,
-            global_initialization,
-            workspace_cache,
-        )));
+        let result = runtime.block_on(Box::pin(run(cli, global_initialization)));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that

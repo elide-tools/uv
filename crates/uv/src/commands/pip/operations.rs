@@ -334,6 +334,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                 &constraints,
                 &overrides,
                 &excludes,
+                build_dispatch.dependency_metadata(),
                 &hasher,
                 index,
                 DistributionDatabase::new(

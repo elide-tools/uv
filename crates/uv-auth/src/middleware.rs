@@ -3,7 +3,8 @@ use std::sync::{Arc, LazyLock};
 use anyhow::{anyhow, format_err};
 use http::{Extensions, StatusCode};
 use reqwest::{Request, Response};
-use reqwest_middleware::{ClientWithMiddleware, Error, Middleware, Next};
+use reqwest_middleware::{Error, Middleware, Next};
+#[cfg(feature = "cloud-auth")]
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
@@ -11,14 +12,12 @@ use uv_netrc::Netrc;
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
-use uv_warnings::owo_colors::OwoColorize;
 
 use crate::providers::HuggingFaceProvider;
 #[cfg(feature = "cloud-auth")]
 use crate::providers::{AzureEndpointProvider, GcsEndpointProvider, S3EndpointProvider};
-use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
 use crate::{
-    AccessToken, CredentialsCache, KeyringProvider,
+    CredentialsCache, KeyringProvider,
     cache::FetchUrl,
     credentials::{
         Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
@@ -143,15 +142,6 @@ impl TextStoreMode {
     }
 }
 
-#[derive(Debug, Clone)]
-enum TokenState {
-    /// The token state has not yet been initialized from the store.
-    Uninitialized,
-    /// The token state has been initialized, and the store either returned tokens or `None` if
-    /// the user has not yet authenticated.
-    Initialized(Option<AccessToken>),
-}
-
 #[cfg(feature = "cloud-auth")]
 #[derive(Clone)]
 enum S3CredentialState {
@@ -197,12 +187,6 @@ pub struct AuthMiddleware {
     /// Set all endpoints as needing authentication. We never try to send an
     /// unauthenticated request, avoiding cloning an uncloneable request.
     only_authenticated: bool,
-    /// The base client to use for requests within the middleware.
-    base_client: Option<ClientWithMiddleware>,
-    /// The pyx token store to use for persistent credentials.
-    pyx_token_store: Option<PyxTokenStore>,
-    /// Tokens to use for persistent credentials.
-    pyx_token_state: Mutex<TokenState>,
     /// Cached S3 credentials to avoid running the credential helper multiple times.
     #[cfg(feature = "cloud-auth")]
     s3_credential_state: Mutex<S3CredentialState>,
@@ -231,9 +215,6 @@ impl AuthMiddleware {
             cache: Arc::new(CredentialsCache::default()),
             indexes: Indexes::new(),
             only_authenticated: false,
-            base_client: None,
-            pyx_token_store: None,
-            pyx_token_state: Mutex::new(TokenState::Uninitialized),
             #[cfg(feature = "cloud-auth")]
             s3_credential_state: Mutex::new(S3CredentialState::Uninitialized),
             #[cfg(feature = "cloud-auth")]
@@ -313,20 +294,6 @@ impl AuthMiddleware {
     #[must_use]
     pub fn with_only_authenticated(mut self, only_authenticated: bool) -> Self {
         self.only_authenticated = only_authenticated;
-        self
-    }
-
-    /// Configure the [`ClientWithMiddleware`] to use for requests within the middleware.
-    #[must_use]
-    pub fn with_base_client(mut self, client: ClientWithMiddleware) -> Self {
-        self.base_client = Some(client);
-        self
-    }
-
-    /// Configure the [`PyxTokenStore`] to use for persistent credentials.
-    #[must_use]
-    pub fn with_pyx_token_store(mut self, token_store: PyxTokenStore) -> Self {
-        self.pyx_token_store = Some(token_store);
         self
     }
 
@@ -436,18 +403,8 @@ impl Middleware for AuthMiddleware {
             .as_ref()
             .is_some_and(|credentials| credentials.username().is_some());
 
-        // Determine whether this is a "known" URL.
-        let is_known_url = self
-            .pyx_token_store
-            .as_ref()
-            .is_some_and(|token_store| token_store.is_known_url(request.url()));
-
         let must_authenticate = self.only_authenticated
-            || (match auth_policy {
-                    AuthPolicy::Auto => is_known_url,
-                    AuthPolicy::Always => true,
-                    AuthPolicy::Never => false,
-                }
+            || (matches!(auth_policy, AuthPolicy::Always)
                 // Dependabot intercepts HTTP requests and injects credentials, which means that we
                 // cannot eagerly enforce an `AuthPolicy` as we don't know whether credentials will be
                 // added outside of uv.
@@ -560,19 +517,6 @@ impl Middleware for AuthMiddleware {
 
         if let Some(response) = response {
             Ok(response)
-        } else if let Some(store) = is_known_url
-            .then_some(self.pyx_token_store.as_ref())
-            .flatten()
-        {
-            let domain = store
-                .api()
-                .domain()
-                .unwrap_or("pyx.dev")
-                .trim_start_matches("api.");
-            Err(Error::Middleware(format_err!(
-                "Run `{}` to authenticate uv with pyx",
-                format!("uv auth login {domain}").green()
-            )))
         } else {
             Err(Error::Middleware(format_err!(
                 "Missing credentials for {url}"
@@ -824,45 +768,8 @@ impl AuthMiddleware {
             }
         }
 
-        // If this is a known URL, authenticate it via the token store.
-        let credentials = if let Some(credentials) = async {
-            let base_client = self.base_client.as_ref()?;
-            let token_store = self.pyx_token_store.as_ref()?;
-            if !token_store.is_known_url(url) {
-                return None;
-            }
-
-            let mut token_state = self.pyx_token_state.lock().await;
-
-            // If the token store is uninitialized, initialize it.
-            let token = match *token_state {
-                TokenState::Uninitialized => {
-                    trace!("Initializing token store for {url}");
-                    let generated = match token_store
-                        .access_token(base_client, DEFAULT_TOLERANCE_SECS)
-                        .await
-                    {
-                        Ok(Some(token)) => Some(token),
-                        Ok(None) => None,
-                        Err(err) => {
-                            warn!("Failed to generate access tokens: {err}");
-                            None
-                        }
-                    };
-                    *token_state = TokenState::Initialized(generated.clone());
-                    generated
-                }
-                TokenState::Initialized(ref tokens) => tokens.clone(),
-            };
-
-            token.map(Credentials::from)
-        }
-        .await
-        {
-            debug!("Found credentials from token store for {url}");
-            Some(credentials)
         // Netrc support based on: <https://github.com/gribouille/netrc>.
-        } else if let Some(credentials) = self.netrc.get().and_then(|netrc| {
+        let credentials = if let Some(credentials) = self.netrc.get().and_then(|netrc| {
             debug!("Checking netrc for credentials for {url}");
             Credentials::from_netrc(
                 netrc,

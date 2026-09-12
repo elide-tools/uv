@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::atomic::Ordering;
 use std::{env, io, iter};
 use std::{path::Path, path::PathBuf, str::FromStr};
 use thiserror::Error;
@@ -14,7 +15,6 @@ use tracing::{debug, instrument, trace};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_distribution_types::RequiresPython;
-#[cfg(feature = "python-managed")]
 use uv_errors::Hints;
 use uv_fs::Simplified;
 use uv_fs::which::is_executable;
@@ -24,7 +24,6 @@ use uv_pep440::{
 };
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
-#[cfg(feature = "python-managed")]
 use uv_warnings::write_warning_chain;
 use which::{which, which_all};
 
@@ -1369,8 +1368,8 @@ fn find_python_installations_with_strategy<'a>(
 /// concurrently.
 ///
 /// Unlike [`find_python_installations`], this eagerly collects matching installations instead of
-/// returning a lazy iterator. Non-critical discovery errors are dropped, while critical errors are
-/// propagated in discovery order.
+/// returning a lazy iterator. Interpreter query failures produce warnings and are skipped. Other
+/// non-critical discovery errors are dropped, while critical errors are propagated in discovery order.
 pub fn find_all_python_installations(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1389,6 +1388,12 @@ pub fn find_all_python_installations(
         match result {
             Ok(Ok(installation)) => installations.push(installation),
             Ok(Err(_)) => {}
+            Err(err @ Error::Query(..)) => {
+                if uv_warnings::ENABLED.load(Ordering::Relaxed) {
+                    write_warning_chain(&err, Hints::none())
+                        .expect("writing to stderr should not fail");
+                }
+            }
             Err(err) if err.is_critical() => return Err(err),
             Err(_) => {}
         }

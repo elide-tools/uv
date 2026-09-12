@@ -123,8 +123,10 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
             Dist::Source(ref dist) => {
                 if self.build_options.no_build_package(dist.name()) {
-                    if dist.is_editable() {
-                        debug!("Allowing build for editable source distribution: {dist}");
+                    if dist.is_editable() || dist.is_first_party() {
+                        debug!(
+                            "Allowing build for first-party or editable source distribution: {dist}"
+                        );
                     } else {
                         return Err(Error::NoBuild(dist.name().clone()));
                     }
@@ -169,7 +171,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                 Err(err) => Err(Error::Thread(err.to_owned())),
             }
         } else {
-            let policy = self.hashes.get(&dist);
+            let policy = self.hashes.archive_policy(&dist);
 
             let result = self
                 .database

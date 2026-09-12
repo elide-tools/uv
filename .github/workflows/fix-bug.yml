@@ -34,7 +34,7 @@ on:
         type: string
       runner:
         description: "The runner to use for bug fixing"
-        default: ubuntu-latest
+        default: github-ubuntu-24.04-x86_64-4
         required: false
         type: string
     outputs:
@@ -46,6 +46,9 @@ on:
         value: ${{ jobs.publish.outputs.pull-request }}
 
 permissions: {}
+
+env:
+  UV_LOCKED: 1
 
 jobs:
   fix:
@@ -95,7 +98,7 @@ jobs:
         with:
           enable-cache: false
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
 
@@ -296,7 +299,7 @@ jobs:
           UV_CACHE_DIR: ${{ runner.temp }}/uv-fix-bug-cache
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: "0.146.0"
+          codex-version: "0.147.0"
           codex-home: "${{ runner.temp }}/codex-home"
           effort: high
           codex-args: >-
@@ -447,7 +450,7 @@ jobs:
   publish:
     needs: fix
     if: needs.fix.outputs.publish == 'true'
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 10
     permissions:
@@ -673,7 +676,7 @@ jobs:
       needs.fix.result == 'success' &&
       needs.fix.outputs.result != '' &&
       (needs.publish.result == 'success' || needs.publish.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 10
     concurrency:

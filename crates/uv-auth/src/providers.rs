@@ -1,7 +1,8 @@
 use std::sync::LazyLock;
 
 #[cfg(feature = "cloud-auth")]
-use anyhow::{Context, Result};
+use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "cloud-auth")]
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 #[cfg(feature = "cloud-auth")]
@@ -15,8 +16,9 @@ use tracing::debug;
 use url::ParseError;
 use url::Url;
 
+use uv_preview::Preview;
 #[cfg(feature = "cloud-auth")]
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::PreviewFeature;
 use uv_static::EnvVars;
 #[cfg(feature = "cloud-auth")]
 use uv_warnings::warn_user_once;
@@ -173,14 +175,13 @@ static AZURE_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_AZURE_ENDPOINT_URL));
 
 /// A provider for authentication credentials for Azure endpoints.
-#[cfg(feature = "cloud-auth")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AzureEndpointProvider;
+pub struct AzureEndpointProvider;
 
-#[cfg(feature = "cloud-auth")]
 impl AzureEndpointProvider {
     /// Returns `true` if the URL matches the configured Azure endpoint.
-    pub(crate) fn is_azure_endpoint(url: &Url, preview: Preview) -> Result<bool> {
+    #[cfg(feature = "cloud-auth")]
+    pub fn is_azure_endpoint(url: &Url, preview: Preview) -> Result<bool> {
         if let Some(azure_endpoint_url) = AZURE_ENDPOINT_URL
             .as_ref()
             .map_err(|error| *error)
@@ -199,6 +200,12 @@ impl AzureEndpointProvider {
                 return Ok(true);
             }
         }
+        Ok(false)
+    }
+
+    /// Cloud endpoints are disabled without cloud authentication support.
+    #[cfg(not(feature = "cloud-auth"))]
+    pub fn is_azure_endpoint(_url: &Url, _preview: Preview) -> Result<bool> {
         Ok(false)
     }
 

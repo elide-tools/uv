@@ -50,7 +50,7 @@ pub struct FlatIndexEntry {
 
 impl FlatIndexEntry {
     /// Return the distribution filename.
-    pub(crate) fn filename(&self) -> &DistFilename {
+    pub fn filename(&self) -> &DistFilename {
         &self.filename
     }
 
@@ -354,7 +354,7 @@ impl<'a> FlatIndexClient<'a> {
             let url = DisplaySafeUrl::from_file_path(entry.path()).unwrap();
 
             let file = File {
-                dist_info_metadata: false,
+                dist_info_metadata: None,
                 filename: filename.into(),
                 hashes: HashDigests::empty(),
                 requires_python: None,
@@ -362,7 +362,6 @@ impl<'a> FlatIndexClient<'a> {
                 upload_time_utc_ms: None,
                 url: FileLocation::AbsoluteUrl(UrlString::from(url)),
                 yanked: None,
-                zstd: None,
             };
 
             let Some(filename) = DistFilename::try_from_normalized_filename(filename) else {
@@ -395,6 +394,30 @@ mod tests {
     use fs_err::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    /// Round-trip a synthetic flat-index cache entry and preserve sidecar hashes.
+    #[test]
+    fn cached_files_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let url = DisplaySafeUrl::parse("https://example.com/flat/")?;
+        let files = FlatIndexClient::parse_html(
+            r#"<a href="example-1.0.0-py3-none-any.whl" data-core-metadata="sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef">example-1.0.0-py3-none-any.whl</a>"#,
+            &url,
+        )?;
+        assert_eq!(files.len(), 1);
+        let metadata_hashes = files[0].dist_info_metadata.clone();
+        assert!(
+            metadata_hashes
+                .as_ref()
+                .is_some_and(|hashes| !hashes.is_empty())
+        );
+        let archived = OwnedArchive::from_unarchived(&files)?;
+        let files = OwnedArchive::deserialize(&archived);
+        let entries =
+            FlatIndexClient::entries_from_files(files, &IndexUrl::parse(url.as_str(), None)?);
+        assert_eq!(entries.entries.len(), 1);
+        assert_eq!(entries.entries[0].file.dist_info_metadata, metadata_hashes);
+        Ok(())
+    }
 
     #[test]
     fn read_from_directory_sorts_distributions() {
