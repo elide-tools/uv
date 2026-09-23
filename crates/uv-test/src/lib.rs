@@ -117,14 +117,13 @@ pub const INSTA_FILTERS: &[(&str, &str)] = &[
         r"(?ms)^([ \t]*custom_certificates: )(?:None|Some\(\n.*?^[ \t]*\),\n[ \t]*\)),",
         "${1}[CERTIFICATES],",
     ),
-    // Filter SSL certificate loading debug messages (environment-dependent)
-    (r"DEBUG Loaded \d+ certificate\(s\) from [^\n]+\n", ""),
 ];
 
 /// Create a context for tests which simplifies shared behavior across tests.
 ///
 /// * Set the current directory to a temporary directory (`temp_dir`).
 /// * Set the cache dir to a different temporary directory (`cache_dir`).
+/// * Share the Python download cache unless explicitly disabled.
 /// * Set a shared test timestamp so snapshots don't change after a new release.
 /// * Set the venv to a fresh `.venv` in `temp_dir`
 pub struct TestContext {
@@ -336,7 +335,7 @@ impl TestContext {
     #[must_use]
     pub fn with_filtered_missing_file_error(mut self) -> Self {
         // The exact message string depends on the system language, so we remove it.
-        // We want to only remove the phrase after `Caused by:`
+        // Keep the severity or cause prefix while removing the operating system's message.
         self.filters.push((
             r"[^:\n]* \(os error 2\)".to_string(),
             " [OS ERROR 2]".to_string(),
@@ -702,19 +701,11 @@ impl TestContext {
         self
     }
 
-    /// Use a shared global cache for Python downloads.
+    /// Disable the shared Python download cache for tests that require fresh downloads or isolated cache state.
     #[must_use]
-    pub fn with_python_download_cache(mut self) -> Self {
-        self.extra_env.push((
-            EnvVars::UV_PYTHON_CACHE_DIR.into(),
-            // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory
-            env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
-                uv_cache::Cache::from_settings(false, None)
-                    .unwrap()
-                    .bucket(CacheBucket::Python)
-                    .into()
-            }),
-        ));
+    pub fn without_python_download_cache(mut self) -> Self {
+        self.extra_env
+            .retain(|(key, _)| key != EnvVars::UV_PYTHON_CACHE_DIR);
         self
     }
 
@@ -1022,10 +1013,7 @@ impl TestContext {
                 .map(|pattern| (pattern, "[UV]".to_string())),
         );
 
-        // Exclude `link-mode` on Windows since we set it in the remote test suite
         if cfg!(windows) {
-            filters.push((" --link-mode <LINK_MODE>".to_string(), String::new()));
-            filters.push((r#"link-mode = "copy"\n"#.to_string(), String::new()));
             // Unix uses "exit status", Windows uses "exit code"
             filters.push((r"exit code: ".to_string(), "exit status: ".to_string()));
         }
@@ -1197,7 +1185,16 @@ impl TestContext {
             python_versions,
             uv_bin,
             filters,
-            extra_env: vec![],
+            extra_env: vec![(
+                EnvVars::UV_PYTHON_CACHE_DIR.into(),
+                // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
+                env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
+                    Cache::from_settings(false, None)
+                        .expect("Failed to determine the shared Python download cache")
+                        .bucket(CacheBucket::Python)
+                        .into()
+                }),
+            )],
             _root: root,
             _extra_tempdirs: vec![],
         }
@@ -1324,15 +1321,18 @@ impl TestContext {
             .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
             .env(EnvVars::UV_PYTHON_SEARCH_PATH, self.python_path())
             .env(EnvVars::UV_EXCLUDE_NEWER, TEST_TIMESTAMP)
-            .env(EnvVars::UV_TEST_CURRENT_TIMESTAMP, TEST_TIMESTAMP)
-            .env(EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF, TEST_TIMESTAMP)
+            .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, TEST_TIMESTAMP)
+            .env(
+                EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF,
+                TEST_TIMESTAMP,
+            )
             // Keep Python discovery hermetic and avoid mutating global state, like the Windows
             // registry, unless a test opts in explicitly.
             .env(EnvVars::UV_PYTHON_NO_REGISTRY, "1")
             .env(EnvVars::UV_PYTHON_INSTALL_REGISTRY, "0")
             // Since downloads, fetches and builds run in parallel, their message output order is
             // non-deterministic, so can't capture them in test output.
-            .env(EnvVars::UV_TEST_NO_CLI_PROGRESS, "1")
+            .env(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS, "1")
             // I believe the intent of all tests is that they are run outside the
             // context of an existing git repository. And when they aren't, state
             // from the parent git repository can bleed into the behavior of `uv
@@ -2073,7 +2073,6 @@ impl TestContext {
             // For linux distributions
             EnvVars::PATH,
             // For debugging tests.
-            EnvVars::RUST_LOG,
             EnvVars::RUST_BACKTRACE,
             // Windows System configuration.
             EnvVars::SYSTEMDRIVE,
@@ -2096,6 +2095,10 @@ impl TestContext {
             .filter(|name| !passthrough.contains(name))
         {
             command.env_remove(env_var);
+        }
+
+        if let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG) {
+            command.env(EnvVars::RUST_LOG, rust_log);
         }
 
         command

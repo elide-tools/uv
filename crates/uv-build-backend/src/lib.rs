@@ -95,10 +95,10 @@ pub enum Error {
     GzipWrite(PathBuf, #[source] io::Error),
 }
 
-impl uv_errors::Hint for Error {
+impl uv_errors::Hinted for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::PortableGlob { source, .. } => uv_errors::Hint::hints(source),
+            Self::PortableGlob { source, .. } => uv_errors::Hinted::hints(source),
             _ => uv_errors::Hints::none(),
         }
     }
@@ -479,6 +479,7 @@ pub(crate) fn error_on_venv(file_name: &OsStr, path: &Path) -> Result<(), Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_zip::Compression;
     use async_zip::base::read::mem::ZipFileReader;
     use flate2::bufread::GzDecoder;
     use fs_err::File;
@@ -493,7 +494,7 @@ mod tests {
     use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
     use tempfile::TempDir;
     use uv_distribution_filename::{SourceDistFilename, WheelFilename};
-    use uv_errors::{ErrorWithHints, Hint};
+    use uv_errors::{ErrorWithHints, Hinted};
     use uv_fs::{copy_dir_all, relative_to};
     use uv_preview::PreviewFeature;
 
@@ -717,6 +718,34 @@ mod tests {
             &[],
             "1d9ce1ce63195fbee07314c0b595ba9e063670da8d10c252c351b21e94e3f508",
         );
+    }
+
+    #[test]
+    fn editable_wheel_compression() -> Result<(), Error> {
+        let _preview = uv_preview::test::with_features(&[]);
+        let source = Path::new("../../test/packages/built-by-uv");
+        let dist = TempDir::new()?;
+
+        let filename = build_wheel(source, dist.path(), None, MOCK_UV_VERSION, false)?;
+        let wheel = block_on(read_wheel(&dist.path().join(filename.to_string())));
+        let filename = build_editable(source, dist.path(), None, MOCK_UV_VERSION, false)?;
+        let editable = block_on(read_wheel(&dist.path().join(filename.to_string())));
+
+        for (archive, compression) in [
+            (wheel, Compression::Deflate),
+            (editable, Compression::Stored),
+        ] {
+            assert!(!archive.file().entries().is_empty());
+            for entry in archive.file().entries() {
+                let expected = if entry.dir()? {
+                    Compression::Stored
+                } else {
+                    compression
+                };
+                assert_eq!(entry.compression(), expected);
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -1988,96 +2017,6 @@ mod tests {
     /// compatibility with older tools. The original file is preserved as pyproject.toml.orig.
     #[test]
     fn toml_1_1_backward_compatibility() {
-        let _preview = uv_preview::test::with_features(&[]);
-        let src = TempDir::new().unwrap();
-
-        // A `pyproject.toml` with a TOML 1.1 feature, trailing commas in inline tables.
-        let pyproject_toml = indoc! {r#"
-            [project]
-            name = "toml11-project"
-            version = "0.1.0"
-            description = "A test package using TOML 1.1 features"
-            requires-python = ">=3.12"
-            # TOML 1.1 feature: Trailing comma in inline table
-            authors = [
-                { name = "Ferris", email = "ferris@example.com", },
-                { name = "Platypus", email = "platypus@example.com", },
-            ]
-
-            [tool.foo]
-            when = 1969-06-20T20:17Z
-
-            [build-system]
-            requires = ["uv_build>=0.5.15,<0.6.0"]
-            build-backend = "uv_build"
-        "#};
-
-        fs_err::write(src.path().join("pyproject.toml"), pyproject_toml).unwrap();
-        fs_err::create_dir_all(src.path().join("src").join("toml11_project")).unwrap();
-        File::create(
-            src.path()
-                .join("src")
-                .join("toml11_project")
-                .join("__init__.py"),
-        )
-        .unwrap();
-
-        let dist = TempDir::new().unwrap();
-        let build = build(src.path(), dist.path()).unwrap();
-
-        // Check that both `pyproject.toml` and `pyproject.toml.orig` are in the sdist.
-        assert_snapshot!(build.source_dist_contents.join("\n"), @"
-        toml11_project-0.1.0/
-        toml11_project-0.1.0/PKG-INFO
-        toml11_project-0.1.0/pyproject.toml
-        toml11_project-0.1.0/pyproject.toml.orig
-        toml11_project-0.1.0/src
-        toml11_project-0.1.0/src/toml11_project
-        toml11_project-0.1.0/src/toml11_project/__init__.py
-        ");
-
-        // Extract the sdist to verify the contents of both files.
-        let source_dist_path = dist.path().join(build.source_dist_filename.to_string());
-        let sdist_tree = TempDir::new().unwrap();
-        unpack_sdist(&source_dist_path, sdist_tree.path()).unwrap();
-        let sdist_top_level_directory = sdist_tree.path().join(format!(
-            "{}-{}",
-            build.source_dist_filename.name.as_dist_info_name(),
-            build.source_dist_filename.version
-        ));
-        let pyproject_toml_content =
-            fs_err::read_to_string(sdist_top_level_directory.join("pyproject.toml")).unwrap();
-        let pyproject_toml_orig_content =
-            fs_err::read_to_string(sdist_top_level_directory.join("pyproject.toml.orig")).unwrap();
-
-        assert_eq!(pyproject_toml_orig_content, pyproject_toml);
-        assert_snapshot!(pyproject_toml_content, @r#"
-        [project]
-        name = "toml11-project"
-        version = "0.1.0"
-        description = "A test package using TOML 1.1 features"
-        requires-python = ">=3.12"
-
-        [[project.authors]]
-        name = "Ferris"
-        email = "ferris@example.com"
-
-        [[project.authors]]
-        name = "Platypus"
-        email = "platypus@example.com"
-
-        [tool.foo]
-        when = 1969-06-20T20:17:00Z
-
-        [build-system]
-        requires = ["uv_build>=0.5.15,<0.6.0"]
-        build-backend = "uv_build"
-        "#);
-    }
-
-    /// Test that TOML 1.1 features in pyproject.toml are rewritten by default.
-    #[test]
-    fn toml_1_1_backward_compatibility_auto_detection() {
         let _preview = uv_preview::test::with_features(&[]);
         let src = TempDir::new().unwrap();
 

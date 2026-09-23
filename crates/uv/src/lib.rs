@@ -55,7 +55,6 @@ use uv_cli::{ToolCommand, ToolNamespace};
 #[cfg(feature = "workspace")]
 use uv_cli::{WorkspaceCommand, WorkspaceNamespace};
 use uv_client::BaseClientBuilder;
-use uv_configuration::min_stack_size;
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -73,6 +72,7 @@ use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
+use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
@@ -261,7 +261,7 @@ struct ExternallyInstalledError {
 }
 
 #[cfg(not(feature = "self-update"))]
-impl uv_errors::Hint for ExternallyInstalledError {
+impl uv_errors::Hinted for ExternallyInstalledError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(source) = &self.install_source {
             uv_errors::Hints::from(format!(
@@ -745,24 +745,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
     anstream::ColorChoice::write_global(globals.color.into());
 
-    if global_initialization.needs_initialization() {
-        // miette's report hook is process-global. Embedded hosts can run uv after another
-        // in-process resolver has already installed a hook, so tolerate the one supported
-        // failure mode and keep the first hook.
-        let _ = miette::set_hook(Box::new(|_| {
-            Box::new(
-                miette::MietteHandlerOpts::new()
-                    .break_words(false)
-                    .word_separator(textwrap::WordSeparator::AsciiSpace)
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                    .wrap_lines(std::env::var(EnvVars::UV_NO_WRAP).is_err())
-                    .build(),
-            )
-        }));
-    }
-
     // Don't initialize the rayon threadpool yet, this is too costly when we're doing a noop sync.
-    uv_configuration::RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
+    RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
 
     // Write out any resolved settings.
     macro_rules! show_settings {
@@ -964,6 +948,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.build_constraints_from_workspace,
                 args.environments,
                 args.required_environments,
+                args.minimum_libc_version,
                 args.settings.extras,
                 groups,
                 args.settings.output_file.as_deref(),
@@ -1106,6 +1091,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 cache,
                 workspace_cache,
                 args.dry_run,
+                args.output_format,
                 printer,
                 globals.preview,
             ))
@@ -1270,6 +1256,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 cache,
                 workspace_cache,
                 args.dry_run,
+                args.output_format,
                 printer,
                 globals.preview,
             ))
@@ -1522,6 +1509,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
             commands::build_frontend(
                 &project_dir,
+                args.skip_dependency_check,
                 args.src,
                 args.package,
                 args.all_packages,
@@ -2321,7 +2309,6 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     &project_dir,
                     args.lock_check,
                     args.frozen,
-                    args.dry_run,
                     args.refresh,
                     args.sync,
                     args.active,
@@ -2720,7 +2707,7 @@ async fn run_project(
         }
         ProjectCommand::Upgrade(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::UpgradeSettings::resolve(args, filesystem, environment);
+            let args = settings::UpgradeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -3060,6 +3047,7 @@ async fn run_project(
                 args.hashes,
                 args.install_options,
                 args.output_file,
+                args.batch,
                 args.extras,
                 args.groups,
                 args.editable,
@@ -3322,9 +3310,8 @@ where
         cli.top_level.global_args.no_progress,
     );
 
-    // Process-global state (flags, preview configuration, the open-file limit, the tracing
-    // subscriber and the miette hook) can only be initialized once, and upstream errors on a
-    // second attempt. An embedding host can call this entry point more than once per process, so
+    // Process-global state (flags, preview configuration, the open-file limit and the tracing
+    // subscriber) can only be initialized once, and upstream errors on a second attempt. An embedding host can call this entry point more than once per process, so
     // initialize on the first call and reuse that state afterwards.
     static INITIALIZED: AtomicBool = AtomicBool::new(false);
     let global_initialization = if INITIALIZED.swap(true, Ordering::SeqCst) {

@@ -47,7 +47,7 @@ use uv_cli::{
     PackageExcludeNewerArgs, RegistryClientArgs, ResolverArgs, ResolverInstallerArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
-        resolver_installer_options, resolver_options,
+        resolver_installer_options, resolver_options, upgrade_options,
     },
 };
 use uv_cli::{
@@ -56,8 +56,8 @@ use uv_cli::{
 };
 #[cfg(feature = "pip")]
 use uv_cli::{
-    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
-    PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipInstallFormat, PipListArgs,
+    PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
 };
 #[cfg(feature = "python-managed")]
 use uv_cli::{
@@ -70,6 +70,7 @@ use uv_cli::{
     ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs, ToolUpgradeArgs,
 };
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
+use uv_configuration::RequirementsInput;
 use uv_configuration::{
     ActiveEnvironment, BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DevMode,
     DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
@@ -80,7 +81,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
-    PackageConfigSettings, Requirement,
+    MinimumLibcVersion, NameRequirementSpecification, PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
@@ -375,14 +376,14 @@ impl NetworkSettings {
                 "The `--no-native-tls` flag is deprecated and will be removed in a future release. Use `--no-system-certs` instead."
             );
         }
-        if environment.native_tls.value.is_some() {
+        if environment.native_tls.value.is_some() && environment.system_certs.value.is_none() {
             warn_user_once!(
                 "The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead."
             );
         }
-        if workspace
-            .and_then(|workspace| workspace.globals.native_tls)
-            .is_some()
+        if let Some(workspace) = workspace
+            && workspace.globals.native_tls.is_some()
+            && workspace.globals.system_certs.is_none()
         {
             warn_user_once!(
                 "The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead."
@@ -813,7 +814,7 @@ pub(crate) struct RunSettings {
     pub(crate) modifications: Modifications,
     pub(crate) with: Vec<String>,
     pub(crate) with_editable: Vec<String>,
-    pub(crate) with_requirements: Vec<PathBuf>,
+    pub(crate) with_requirements: Vec<RequirementsInput>,
     pub(crate) isolated: bool,
     pub(crate) show_resolution: bool,
     pub(crate) all_packages: bool,
@@ -1012,11 +1013,11 @@ pub(crate) struct ToolRunSettings {
     pub(crate) command: Option<ExternalCommand>,
     pub(crate) from: Option<String>,
     pub(crate) with: Vec<String>,
-    pub(crate) with_requirements: Vec<PathBuf>,
+    pub(crate) with_requirements: Vec<RequirementsInput>,
     pub(crate) with_editable: Vec<String>,
-    pub(crate) constraints: Vec<PathBuf>,
-    pub(crate) overrides: Vec<PathBuf>,
-    pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) constraints: Vec<RequirementsInput>,
+    pub(crate) overrides: Vec<RequirementsInput>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
     pub(crate) isolated: bool,
     pub(crate) show_resolution: bool,
     pub(crate) lfs: GitLfsSetting,
@@ -1174,13 +1175,13 @@ pub(crate) struct ToolInstallSettings {
     pub(crate) package: String,
     pub(crate) from: Option<String>,
     pub(crate) with: Vec<String>,
-    pub(crate) with_requirements: Vec<PathBuf>,
+    pub(crate) with_requirements: Vec<RequirementsInput>,
     pub(crate) with_executables_from: Vec<String>,
     pub(crate) with_editable: Vec<String>,
-    pub(crate) constraints: Vec<PathBuf>,
-    pub(crate) overrides: Vec<PathBuf>,
-    pub(crate) excludes: Vec<PathBuf>,
-    pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) constraints: Vec<RequirementsInput>,
+    pub(crate) overrides: Vec<RequirementsInput>,
+    pub(crate) excludes: Vec<RequirementsInput>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
     pub(crate) lfs: GitLfsSetting,
     pub(crate) python: Option<String>,
     pub(crate) python_platform: Option<TargetTriple>,
@@ -2325,29 +2326,28 @@ impl UpgradeSettings {
         args: UpgradeArgs,
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
             .unwrap_or_default();
-        let packages = args.packages;
-        let exclude = args.exclude;
-        let mut settings =
-            ResolverSettings::combine(ResolverOptions::default(), filesystem, &environment);
+        let (packages, exclude, options) =
+            upgrade_options(args, configured_indexes(filesystem.as_ref()))?;
+        let mut settings = ResolverSettings::combine(options, filesystem, &environment);
         settings.upgrade = if packages.is_empty() {
             Upgrade::default()
         } else {
             Upgrade::from_packages(packages.clone())
         };
 
-        Self {
+        Ok(Self {
             packages,
             exclude,
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
             settings,
-        }
+        })
     }
 }
 
@@ -2359,7 +2359,6 @@ pub(crate) struct MetadataSettings {
     script: Option<PathBuf>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
-    pub(crate) dry_run: DryRun,
     pub(crate) sync: Option<Modifications>,
     pub(crate) active: ActiveEnvironment,
     pub(crate) python: Option<String>,
@@ -2383,7 +2382,6 @@ impl MetadataSettings {
             no_locked,
             frozen,
             no_frozen,
-            dry_run,
             resolver,
             build,
             refresh,
@@ -2410,7 +2408,6 @@ impl MetadataSettings {
             script,
             lock_check: locked,
             frozen,
-            dry_run: DryRun::from_args(dry_run),
             sync: sync.then_some(if exact {
                 Modifications::Exact
             } else {
@@ -2438,8 +2435,8 @@ pub(crate) struct AddSettings {
     pub(crate) active: ActiveEnvironment,
     pub(crate) no_sync: bool,
     pub(crate) packages: Vec<String>,
-    pub(crate) requirements: Vec<PathBuf>,
-    pub(crate) constraints: Vec<PathBuf>,
+    pub(crate) requirements: Vec<RequirementsInput>,
+    pub(crate) constraints: Vec<RequirementsInput>,
     pub(crate) marker: Option<MarkerTree>,
     pub(crate) dependency_type: DependencyType,
     pub(crate) editable: Option<EditableMode>,
@@ -3041,6 +3038,7 @@ pub(crate) struct ExportSettings {
     pub(super) editable: Option<EditableMode>,
     pub(super) hashes: bool,
     pub(super) install_options: InstallOptions,
+    pub(super) batch: Option<PathBuf>,
     pub(super) output_file: Option<PathBuf>,
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
@@ -3096,6 +3094,7 @@ impl ExportSettings {
             no_editable_package,
             hashes,
             no_hashes,
+            batch,
             output_file,
             no_emit_project,
             only_emit_project,
@@ -3189,6 +3188,7 @@ impl ExportSettings {
                 no_emit_package,
                 only_emit_package,
             ),
+            batch,
             output_file,
             lock_check: locked,
             frozen,
@@ -3567,17 +3567,18 @@ fn workspace_overrides(filesystem: Option<&FilesystemOptions>) -> Vec<Override<R
 #[derive(Debug, Clone)]
 pub(crate) struct PipCompileSettings {
     pub(crate) format: Option<PipCompileFormat>,
-    pub(crate) src_file: Vec<PathBuf>,
-    pub(crate) constraints: Vec<PathBuf>,
-    pub(crate) overrides: Vec<PathBuf>,
-    pub(crate) excludes: Vec<PathBuf>,
-    pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) src_file: Vec<RequirementsInput>,
+    pub(crate) constraints: Vec<RequirementsInput>,
+    pub(crate) overrides: Vec<RequirementsInput>,
+    pub(crate) excludes: Vec<RequirementsInput>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
     pub(crate) excludes_from_workspace: Vec<ExcludeDependency>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) environments: SupportedEnvironments,
     pub(crate) required_environments: SupportedEnvironments,
+    pub(crate) minimum_libc_version: Option<MinimumLibcVersion>,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
 }
@@ -3676,7 +3677,13 @@ impl PipCompileSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
@@ -3697,6 +3704,10 @@ impl PipCompileSettings {
         } else {
             SupportedEnvironments::default()
         };
+
+        let minimum_libc_version = filesystem
+            .as_ref()
+            .and_then(|configuration| configuration.minimum_libc_version);
 
         Ok(Self {
             format,
@@ -3723,6 +3734,7 @@ impl PipCompileSettings {
             build_constraints_from_workspace,
             environments,
             required_environments,
+            minimum_libc_version,
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
@@ -3778,10 +3790,11 @@ impl PipCompileSettings {
 #[cfg(feature = "pip")]
 #[derive(Debug, Clone)]
 pub(crate) struct PipSyncSettings {
-    pub(crate) src_file: Vec<PathBuf>,
-    pub(crate) constraints: Vec<PathBuf>,
-    pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) src_file: Vec<RequirementsInput>,
+    pub(crate) constraints: Vec<RequirementsInput>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
     pub(crate) dry_run: DryRun,
+    pub(crate) output_format: PipInstallFormat,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
 }
@@ -3829,8 +3842,10 @@ impl PipSyncSettings {
             strict,
             no_strict,
             dry_run,
+            output_format,
             torch_backend,
             compat_args: _,
+            check,
         } = *args;
 
         Ok(Self {
@@ -3843,7 +3858,12 @@ impl PipSyncSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
-            dry_run: DryRun::from_args(dry_run),
+            dry_run: if check {
+                DryRun::Check
+            } else {
+                DryRun::from_args(dry_run)
+            },
+            output_format,
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
@@ -3887,18 +3907,19 @@ impl PipSyncSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct PipInstallSettings {
     pub(crate) package: Vec<String>,
-    pub(crate) requirements: Vec<PathBuf>,
+    pub(crate) requirements: Vec<RequirementsInput>,
     pub(crate) editables: Vec<String>,
     pub(crate) editable: Option<EditableMode>,
-    pub(crate) constraints: Vec<PathBuf>,
-    pub(crate) overrides: Vec<PathBuf>,
-    pub(crate) excludes: Vec<PathBuf>,
-    pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) constraints: Vec<RequirementsInput>,
+    pub(crate) overrides: Vec<RequirementsInput>,
+    pub(crate) excludes: Vec<RequirementsInput>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
     pub(crate) dry_run: DryRun,
+    pub(crate) output_format: PipInstallFormat,
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
     pub(crate) excludes_from_workspace: Vec<ExcludeDependency>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) modifications: Modifications,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
@@ -3955,8 +3976,10 @@ impl PipInstallSettings {
             strict,
             no_strict,
             dry_run,
+            output_format,
             torch_backend,
             compat_args: _,
+            check,
         } = args;
 
         let constraints_from_workspace = if let Some(configuration) = &filesystem {
@@ -3991,7 +4014,13 @@ impl PipInstallSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
@@ -4018,7 +4047,12 @@ impl PipInstallSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
-            dry_run: DryRun::from_args(dry_run),
+            dry_run: if check {
+                DryRun::Check
+            } else {
+                DryRun::from_args(dry_run)
+            },
+            output_format,
             constraints_from_workspace,
             overrides_from_workspace,
             excludes_from_workspace,
@@ -4075,7 +4109,7 @@ impl PipInstallSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct PipUninstallSettings {
     pub(crate) package: Vec<String>,
-    pub(crate) requirements: Vec<PathBuf>,
+    pub(crate) requirements: Vec<RequirementsInput>,
     pub(crate) dry_run: DryRun,
     pub(crate) settings: PipSettings,
 }
@@ -4386,6 +4420,7 @@ impl PipCheckSettings {
 #[cfg(feature = "build")]
 #[derive(Debug, Clone)]
 pub(crate) struct BuildSettings {
+    pub(crate) skip_dependency_check: bool,
     pub(crate) src: Option<PathBuf>,
     pub(crate) package: Option<PackageName>,
     pub(crate) all_packages: bool,
@@ -4397,8 +4432,8 @@ pub(crate) struct BuildSettings {
     pub(crate) gitignore: bool,
     pub(crate) force_pep517: bool,
     pub(crate) clear: bool,
-    pub(crate) build_constraints: Vec<PathBuf>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints: Vec<RequirementsInput>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) hash_checking: Option<HashCheckingMode>,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
@@ -4415,6 +4450,7 @@ impl BuildSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let BuildArgs {
+            skip_dependency_check,
             src,
             out_dir,
             package,
@@ -4452,7 +4488,13 @@ impl BuildSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
@@ -4460,6 +4502,7 @@ impl BuildSettings {
         };
 
         Ok(Self {
+            skip_dependency_check,
             src,
             package,
             all_packages,
@@ -5561,6 +5604,8 @@ fn parse_failure(name: &str, expected: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    use uv_cli::{IndexArgs, RegistryClientArgs};
+
     use super::*;
 
     #[test]
@@ -5570,10 +5615,22 @@ mod tests {
             UpgradeArgs {
                 packages: vec![package.clone()],
                 exclude: Vec::new(),
+                index_args: IndexArgs {
+                    index: None,
+                    default_index: None,
+                    index_url: None,
+                    extra_index_url: None,
+                    find_links: None,
+                    no_index: false,
+                },
+                registry_client: RegistryClientArgs {
+                    index_strategy: None,
+                    keyring_provider: None,
+                },
             },
             None,
             EnvironmentOptions::new()?,
-        );
+        )?;
         let expected = FxHashSet::from_iter([package]);
 
         assert!(!settings.settings.upgrade.is_all());

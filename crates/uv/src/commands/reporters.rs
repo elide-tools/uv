@@ -27,8 +27,8 @@ use uv_static::EnvVars;
 
 /// Since downloads, fetches and builds run in parallel, their message output order is
 /// non-deterministic, so can't capture them in test output.
-static HAS_UV_TEST_NO_CLI_PROGRESS: LazyLock<bool> =
-    LazyLock::new(|| env::var(EnvVars::UV_TEST_NO_CLI_PROGRESS).is_ok());
+static HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS: LazyLock<bool> =
+    LazyLock::new(|| env::var(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS).is_ok());
 
 fn progress_target(printer: Printer) -> ProgressDrawTarget {
     if embedded_progress::has_progress_sink() {
@@ -223,7 +223,7 @@ impl ProgressReporter {
     fn hidden_fallback(&self, multi_progress: &MultiProgress) -> bool {
         !embedded_progress::has_progress_sink()
             && multi_progress.is_hidden()
-            && !*HAS_UV_TEST_NO_CLI_PROGRESS
+            && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
     }
 
     fn start_embedded_task(
