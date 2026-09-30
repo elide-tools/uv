@@ -7,10 +7,14 @@ use std::process::Command;
 use std::str::FromStr;
 
 use anyhow::Result;
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+use anyhow::{Context, anyhow};
 #[cfg(feature = "test-universal")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
 #[cfg(feature = "test-universal")]
@@ -23,15 +27,18 @@ use url::Url;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+use uv_cache::CacheBucket;
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::Requirement;
 use uv_static::EnvVars;
 
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 #[cfg(feature = "test-universal")]
 use uv_test::diff_snapshot;
+use uv_test::package_server::PackageServer;
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
@@ -5852,58 +5859,26 @@ async fn generate_hashes_url_fragment_source_subdirectory() -> Result<()> {
 #[tokio::test]
 async fn generate_hashes_url_fragment_source_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
+    let name = "source-package".parse()?;
+    let server = PackageServer::new(&name).await;
+    let filename = "source.tar.gz";
+    let source_url = server.file_url(filename);
     let sentinel = context.temp_dir.child("backend-executed");
-    let mut source = Vec::new();
-    write_tar_gz(
-        &mut source,
-        &[
-            (
-                "source_package-1.0.0/pyproject.toml",
-                indoc! {r#"
-                    [build-system]
-                    requires = []
-                    build-backend = "backend"
-                    backend-path = ["."]
-                "#},
-            ),
-            (
-                "source_package-1.0.0/backend.py",
-                indoc! {r#"
-                    import os
-                    from pathlib import Path
-
-                    Path(os.environ["UV_TEST_SENTINEL"]).write_text("executed\n")
-
-                    def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
-                        dist_info = Path(metadata_directory) / "source_package-1.0.0.dist-info"
-                        dist_info.mkdir()
-                        (dist_info / "METADATA").write_text(
-                            "Metadata-Version: 2.2\nName: source-package\nVersion: 1.0.0\n"
-                        )
-                        return dist_info.name
-                "#},
-            ),
-        ],
-    )?;
-    Mock::given(method("GET"))
-        .and(path("/source.tar.gz"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
-        .mount(&server)
-        .await;
+    let source = generate_source_archive(&name, &"1.0.0".parse()?, "", Some(sentinel.path()))?;
+    let source_hash = hex::encode(Sha256::digest(&source));
+    let context = context.with_filter((source_hash, "[SOURCE_HASH]"));
+    server.serve(filename, &source, None).await;
     context
         .temp_dir
         .child("requirements.in")
         .write_str(&format!(
-            "source-package @ {}/source.tar.gz#sha256={}",
-            server.uri(),
+            "source-package @ {source_url}#sha256={}",
             "0".repeat(64),
         ))?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
-        .arg("--generate-hashes")
-        .env("UV_TEST_SENTINEL", sentinel.path()), @"
+        .arg("--generate-hashes"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `source-package @ http://[LOCALHOST]/source.tar.gz#sha256=0000000000000000000000000000000000000000000000000000000000000000`
@@ -5913,7 +5888,7 @@ async fn generate_hashes_url_fragment_source_mismatch() -> Result<()> {
                sha256:0000000000000000000000000000000000000000000000000000000000000000
 
              Computed:
-               sha256:0278d222c8f122de338efc402d719a27f81cb59a73dc2980460f310da098e35c
+               sha256:[SOURCE_HASH]
     ");
     assert!(!sentinel.exists(), "the build backend was executed");
 
@@ -5921,15 +5896,10 @@ async fn generate_hashes_url_fragment_source_mismatch() -> Result<()> {
     context
         .temp_dir
         .child("requirements.in")
-        .write_str(&format!(
-            "{}/source.tar.gz#sha256={}",
-            server.uri(),
-            "0".repeat(64),
-        ))?;
+        .write_str(&format!("{source_url}#sha256={}", "0".repeat(64)))?;
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
-        .arg("--generate-hashes")
-        .env("UV_TEST_SENTINEL", sentinel.path()), @"
+        .arg("--generate-hashes"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Hash mismatch for `http://[LOCALHOST]/source.tar.gz#sha256=0000000000000000000000000000000000000000000000000000000000000000`
@@ -5938,7 +5908,7 @@ async fn generate_hashes_url_fragment_source_mismatch() -> Result<()> {
       sha256:0000000000000000000000000000000000000000000000000000000000000000
 
     Computed:
-      sha256:0278d222c8f122de338efc402d719a27f81cb59a73dc2980460f310da098e35c
+      sha256:[SOURCE_HASH]
     ");
     assert!(!sentinel.exists(), "the build backend was executed");
 
@@ -5946,17 +5916,16 @@ async fn generate_hashes_url_fragment_source_mismatch() -> Result<()> {
     context
         .temp_dir
         .child("requirements.in")
-        .write_str(&format!("{}/source.tar.gz", server.uri()))?;
+        .write_str(&source_url)?;
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
-        .arg("--generate-hashes")
-        .env("UV_TEST_SENTINEL", sentinel.path()), @r"
+        .arg("--generate-hashes"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --generate-hashes
     source-package @ http://[LOCALHOST]/source.tar.gz \
-        --hash=sha256:0278d222c8f122de338efc402d719a27f81cb59a73dc2980460f310da098e35c
+        --hash=sha256:[SOURCE_HASH]
         # via -r requirements.in
 
     ----- stderr -----
@@ -14628,13 +14597,96 @@ fn git_source_missing_tag() -> Result<()> {
     ----- stderr -----
     error: Failed to download and build `uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@missing`
       cause: Git operation failed
-      cause: failed to clone into: [CACHE_DIR]/git-v0/db/8dab139913c4b566
+      cause: failed to clone into: [CACHE_DIR]/git-v1/db/8dab139913c4b566
       cause: failed to fetch tag `missing`
       cause: process didn't exit successfully: `git fetch --force --update-head-ok 'https://github.com/astral-test/uv-public-pypackage' '+refs/tags/missing:refs/remotes/origin/tags/missing'` (exit status: 128)
              --- stderr
              fatal: couldn't find remote ref refs/tags/missing
     ");
 
+    Ok(())
+}
+
+/// Checkout readiness must not overwrite a repository's own `.ok` file.
+#[test]
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+fn git_source_checkout_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+    "#})?;
+    repository.child(".ok").write_str("repository content\n")?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("example @ git+{repository_url}"))?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in").arg("--no-header").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ git+file://[TEMP_DIR]/repository@[COMMIT]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let tracked_file = context
+        .cache_files(CacheBucket::Git)?
+        .into_iter()
+        .find(|path| path.file_name().is_some_and(|name| name == ".ok"))
+        .context("missing tracked .ok file")?;
+    assert_eq!(read_to_string(&tracked_file)?, "repository content\n");
+    let checkout = tracked_file
+        .parent()
+        .context("missing checkout directory")?;
+    let marker = checkout.with_extension("ok");
+    assert!(marker.is_file());
+
+    let sentinel = checkout.join("sentinel");
+    write(&sentinel, "")?;
+    let mut compile = context.pip_compile();
+    compile.arg("requirements.in").arg("--refresh");
+    compile.assert().success();
+    assert!(sentinel.exists());
+
+    // An incomplete checkout must be recreated even when it contains a tracked `.ok` file.
+    remove_file(&marker)?;
+    compile.assert().success();
+    assert!(!sentinel.exists());
+    assert!(marker.is_file());
+    assert_eq!(read_to_string(&tracked_file)?, "repository content\n");
     Ok(())
 }
 
