@@ -25,7 +25,9 @@ jobs:
     if: ${{ github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' }}
     runs-on: github-ubuntu-24.04-x86_64-2
     timeout-minutes: 15
-    environment: automations
+    environment:
+      name: automations
+      deployment: false
     permissions:
       contents: read
       id-token: write # for the credential broker and CodSpeed
@@ -37,12 +39,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: $/.github/actions/setup-uv-toolchain
         with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.12.13"
-          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+          enable-cache: auto
 
       - name: Find public main profiles
         id: source
@@ -54,7 +53,7 @@ jobs:
       - name: Get public benchmark artifact token
         id: token
         if: ${{ steps.source.outputs.run-id != '' }}
-        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        uses: astral-sh/github-actions/simple-token-service@eb81cf4d13127c3f9539f621c17e4c65327636c8
         with:
           exchange-url: ${{ secrets.STS_API_URL }}/exchange
           audience: ${{ secrets.STS_API_URL }}

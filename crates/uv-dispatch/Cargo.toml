@@ -1,6 +1,6 @@
 [package]
 name = "uv-dispatch"
-version = "0.0.88"
+version = "0.0.99"
 description = "This is an internal component crate of uv"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -23,6 +23,7 @@ workspace = true
 source-build = ["dep:uv-build-backend", "dep:uv-build-frontend"]
 
 [dependencies]
+uv-python-interpreter = { workspace = true }
 uv-build-backend = { workspace = true, optional = true }
 uv-build-frontend = { workspace = true, optional = true }
 uv-cache = { workspace = true }
@@ -38,9 +39,9 @@ uv-installer = { workspace = true }
 uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
-uv-python = { workspace = true }
 uv-requirements = { workspace = true }
 uv-resolver = { workspace = true }
+uv-static = { workspace = true }
 uv-types = { workspace = true }
 uv-version = { workspace = true }
 uv-workspace = { workspace = true }

@@ -16,6 +16,7 @@ use uv_errors::{ErrorOptions, Stderr, write_error_chain_with_options};
 /// Whether user-facing warnings are enabled.
 pub static ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// A host-provided destination for user-facing warnings, used when uv is embedded.
 pub trait WarningSink: Send + Sync + 'static {
     fn warning(&self, message: &str);
 }
@@ -23,6 +24,7 @@ pub trait WarningSink: Send + Sync + 'static {
 static ACTIVE_WARNING_SINK: LazyLock<Mutex<Option<Arc<dyn WarningSink>>>> =
     LazyLock::new(Mutex::default);
 
+/// Restores the previously installed [`WarningSink`] when dropped.
 pub struct WarningSinkGuard {
     previous: Option<Arc<dyn WarningSink>>,
 }
@@ -35,12 +37,18 @@ impl Drop for WarningSinkGuard {
     }
 }
 
+/// Route user-facing warnings to `sink` until the returned guard is dropped.
 pub fn install_warning_sink(sink: Arc<dyn WarningSink>) -> WarningSinkGuard {
     let previous = ACTIVE_WARNING_SINK
         .lock()
         .ok()
         .and_then(|mut guard| guard.replace(sink));
     WarningSinkGuard { previous }
+}
+
+/// Return whether user-facing warnings are enabled.
+pub fn is_enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Enable user-facing warnings.
@@ -97,6 +105,7 @@ fn write_warning_chain_with_options<C, W: fmt::Write>(
     )
 }
 
+/// Render a warning to the installed [`WarningSink`], or to standard error.
 pub fn emit_warning(message: &str) {
     use owo_colors::OwoColorize;
 
@@ -122,6 +131,7 @@ pub fn emit_warning(message: &str) {
 #[macro_export]
 macro_rules! warn_user {
     ($($arg:tt)*) => {{
+        // Callers' format arguments rely on the trait being in scope.
         use $crate::owo_colors::OwoColorize;
 
         if $crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -166,6 +176,7 @@ pub static WARNINGS: LazyLock<Mutex<FxHashSet<String>>> = LazyLock::new(Mutex::d
 #[macro_export]
 macro_rules! warn_user_once {
     ($($arg:tt)*) => {{
+        // Callers' format arguments rely on the trait being in scope.
         use $crate::owo_colors::OwoColorize;
 
         if $crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) {

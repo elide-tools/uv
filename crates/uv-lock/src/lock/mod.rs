@@ -17,7 +17,6 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
-use url::Url;
 
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
@@ -26,7 +25,7 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget, NormalizedConstraints,
     NormalizedExcludes, NormalizedOverrideEntries, NormalizedRequirements, Override, Overrides,
     PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode,
-    ScopedOverrideSourceError,
+    ScopedOverrideSourceError, Upgrade,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -47,7 +46,8 @@ use uv_distribution_types::{
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_macros::DebugNoInline;
+use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
     MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
@@ -60,14 +60,15 @@ use uv_pypi_types::{
     ConflictItem, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest, HashDigests,
     ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
 };
-use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+use uv_redacted::{SafeUrl, SafeUrlError};
 use uv_resolver_types::{
-    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse,
+    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse, PackageRole,
     ResolutionGraphNode, ResolverOutput, UniversalMarker,
 };
 use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
+use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
 use uv_workspace::{Editability, WorkspaceMember};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
@@ -90,6 +91,8 @@ mod map;
 mod requirements;
 mod serialize;
 mod tree;
+#[cfg(test)]
+mod windows_emulation_tests;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
@@ -118,10 +121,21 @@ pub enum LockParseError {
 }
 
 /// The current revision of the lockfile format.
-const REVISION: u32 = 3;
+///
+/// Version 1 revisions:
+/// - 0: The original format; a missing `revision` is read as 0.
+/// - 1: Record `provides-extras` and empty dependency group metadata.
+/// - 2: Record distribution upload times.
+/// - 3: Record package-specific `exclude-newer` values.
+/// - 4: Support omitting package declaration metadata and record empty extras and groups.
+/// - 5: Record default groups and dependency group metadata for workspace members and roots.
+const REVISION: u32 = 5;
 
-/// The first lockfile revision that supports omitting package declaration metadata.
-const METADATA_FREE_REVISION: u32 = 4;
+/// The first lockfile revision that records default groups for workspace members and roots.
+const DEFAULT_GROUPS_REVISION: u32 = 5;
+
+/// The first lockfile revision that records workspace member dependency group metadata.
+const MEMBER_GROUP_METADATA_REVISION: u32 = 5;
 
 static LINUX_MARKERS: LazyLock<UniversalMarker> = LazyLock::new(|| {
     let pep508 = MarkerTree::from_str("os_name == 'posix' and sys_platform == 'linux'").unwrap();
@@ -338,6 +352,8 @@ pub struct Lock {
     /// that exists in this map. That is, there are no dependencies that don't
     /// have a corresponding locked package entry in the same lockfile.
     by_id: FxHashMap<PackageId, PackageIndex>,
+    /// Workspace members indexed by name, including the implicit single-project root.
+    workspace_members: BTreeMap<PackageName, PackageIndex>,
     /// The input requirements to the resolution.
     manifest: ResolverManifest,
 }
@@ -2517,9 +2533,9 @@ impl Lock {
             // Git declarations can introduce direct sources needed by offline freshness checks.
             if metadata_free
                 && matches!(package.id.source, Source::Git(..))
-                && let Some(metadata) = dist.metadata.as_ref()
+                && let Some(metadata) = dist.metadata()
             {
-                package.metadata = PackageMetadata::from_distribution(metadata, root)?;
+                package.metadata = PackageMetadata::from_distribution(metadata, root, dist.role)?;
             }
             let mut wheel_marker = dist.marker;
             if let Some(supported_environments_marker) = supported_environments_marker {
@@ -2703,15 +2719,24 @@ impl Lock {
         }
         packages.sort_by(|dist1, dist2| dist1.id.cmp(&dist2.id));
 
-        // Check for duplicate package IDs and also build up the map for
-        // packages keyed by their ID.
+        // Check for duplicate package IDs and index packages by ID and workspace member name.
         let mut by_id = FxHashMap::default();
+        let mut workspace_members = BTreeMap::new();
         for (index, dist) in packages.iter().enumerate() {
             if by_id.insert(dist.id.clone(), PackageIndex(index)).is_some() {
                 return Err(LockErrorKind::DuplicatePackage {
                     id: dist.id.clone(),
                 }
                 .into());
+            }
+
+            // A single-project lockfile can omit its root from the manifest's member list.
+            let is_member = manifest.members.contains(&dist.id.name)
+                || (manifest.members.is_empty()
+                    && workspace_members.is_empty()
+                    && dist.id.source.is_implicit_root());
+            if is_member {
+                workspace_members.insert(dist.id.name.clone(), PackageIndex(index));
             }
         }
 
@@ -2788,6 +2813,7 @@ impl Lock {
             options,
             packages,
             by_id,
+            workspace_members,
             manifest,
         };
         Ok(lock)
@@ -2810,13 +2836,60 @@ impl Lock {
         self
     }
 
+    /// Record the default groups for workspace members in a revision 5 or newer lockfile.
+    ///
+    /// The implicit `["dev"]` default is omitted.
+    #[must_use]
+    pub fn with_member_default_groups(
+        mut self,
+        groups: BTreeMap<PackageName, DefaultGroups>,
+    ) -> Self {
+        let mut groups = nonstandard_member_default_groups(groups);
+        for (name, index) in &self.workspace_members {
+            self.packages[index.0].default_groups = groups.remove(name);
+        }
+        self
+    }
+
+    /// Record the default groups for a workspace root without a `[project]` table.
+    #[must_use]
+    pub fn with_workspace_default_groups(mut self, groups: Option<DefaultGroups>) -> Self {
+        self.manifest.default_groups = groups.filter(|groups| match groups {
+            DefaultGroups::All => true,
+            DefaultGroups::List(groups) => groups.as_slice() != [DEV_DEPENDENCIES.clone()],
+        });
+        self
+    }
+
+    /// Record member group metadata, including Python requirements inherited from included groups.
+    pub fn with_member_group_metadata(
+        mut self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+    ) -> Result<Self, LockError> {
+        let mut metadata = collect_member_group_metadata(packages)?;
+        for (name, index) in &self.workspace_members {
+            self.packages[index.0].group_requires_python =
+                metadata.remove(name).unwrap_or_default();
+        }
+        Ok(self)
+    }
+
+    /// Record dependency group metadata for a workspace root without a `[project]` table.
+    #[must_use]
+    pub fn with_workspace_group_metadata(
+        mut self,
+        groups: BTreeMap<GroupName, GroupMetadata>,
+    ) -> Self {
+        self.manifest.group_requires_python = groups;
+        self
+    }
+
     /// Omit package metadata except for remote URL and Git dependencies.
     ///
     /// Local declarations can be reread from disk. Remote URL and Git declarations remain in the
     /// lockfile so freshness checks can determine offline whether a source is requested or stale.
     #[must_use]
     fn without_package_metadata(mut self) -> Self {
-        self.revision = METADATA_FREE_REVISION;
         let workspace_root = self.root().map(|package| package.id.clone());
         for package in &mut self.packages {
             if matches!(package.id.source, Source::Direct(..) | Source::Git(..)) {
@@ -2867,11 +2940,6 @@ impl Lock {
         (self.version(), self.revision()) >= (1, 1)
     }
 
-    /// Returns `true` if this [`Lock`] can validate packages without declaration metadata.
-    pub fn supports_missing_package_metadata(&self) -> bool {
-        (self.version(), self.revision()) >= (VERSION, METADATA_FREE_REVISION)
-    }
-
     /// Returns `true` if this [`Lock`] includes entries for empty `dependency-group` metadata.
     fn includes_empty_groups(&self) -> bool {
         // Empty dependency groups are included as of https://github.com/astral-sh/uv/pull/8598,
@@ -2904,14 +2972,63 @@ impl Lock {
         &self.packages
     }
 
+    /// Resolve package and dependency-group upgrade selections against this lockfile.
+    pub fn upgrade_packages(&self, upgrade: &Upgrade) -> FxHashSet<PackageName> {
+        if upgrade.is_all() {
+            return self
+                .packages
+                .iter()
+                .map(|package| package.name().clone())
+                .collect();
+        }
+
+        // Resolve the full set of packages to upgrade, combining `--upgrade-package` and
+        // `--upgrade-group`.
+        let mut upgrade_packages = upgrade.packages().cloned().unwrap_or_default();
+        if upgrade.packages().is_some()
+            && let Some(groups) = upgrade.groups()
+        {
+            // Check package-level dependency groups (the standard case for projects with
+            // a `[project]` table).
+            for package in self.packages() {
+                for (group_name, dependencies) in package.resolved_dependency_groups() {
+                    if groups.contains(group_name) {
+                        for dependency in dependencies {
+                            upgrade_packages.insert(dependency.package_name().clone());
+                        }
+                    }
+                }
+            }
+
+            // Check manifest-level dependency groups, which cover projects without a
+            // `[project]` table (e.g., virtual workspace roots or PEP 723 scripts).
+            for (group_name, requirements) in self.dependency_groups() {
+                if groups.contains(group_name) {
+                    for requirement in requirements {
+                        upgrade_packages.insert(requirement.name.clone());
+                    }
+                }
+            }
+        }
+
+        upgrade_packages
+    }
+
     /// Return a [`HashStrategy`] that verifies artifacts recorded in this lockfile.
     ///
-    /// Artifacts absent from the lockfile do not require hashes. This strategy does not generate
-    /// hashes for those artifacts.
-    pub fn hash_strategy(&self, root: &Path) -> Result<HashStrategy, LockError> {
+    /// Registry hashes apply to package names and versions; direct archive hashes apply to URLs
+    /// or paths. Packages in `excluded_packages` are skipped. This strategy does not generate hashes.
+    pub fn hash_strategy(
+        &self,
+        root: &Path,
+        excluded_packages: &FxHashSet<PackageName>,
+    ) -> Result<HashStrategy, LockError> {
         let mut hashes: FxHashMap<VersionId, Vec<HashDigest>> = FxHashMap::default();
 
         for package in &self.packages {
+            if excluded_packages.contains(package.name()) {
+                continue;
+            }
             let (id, package_hashes) = match &package.id.source {
                 Source::Registry(_) => {
                     let Some(version) = &package.id.version else {
@@ -3043,10 +3160,100 @@ impl Lock {
         &self.manifest.members
     }
 
+    /// Return the recorded default groups for workspace members, if supported by the lockfile.
+    ///
+    /// uv-generated lockfiles omit entries for the standard `dev` default.
+    pub fn configured_member_default_groups(
+        &self,
+    ) -> Option<impl Iterator<Item = (&PackageName, &DefaultGroups)>> {
+        ((self.version(), self.revision()) >= (VERSION, DEFAULT_GROUPS_REVISION)).then(|| {
+            self.workspace_packages().filter_map(|package| {
+                package
+                    .default_groups
+                    .as_ref()
+                    .map(|groups| (&package.id.name, groups))
+            })
+        })
+    }
+
+    /// Return a non-project workspace root's default groups, assuming `dev` when not recorded.
+    ///
+    /// Returns `None` if the lockfile predates this metadata.
+    pub fn workspace_default_groups(&self) -> Option<DefaultGroups> {
+        ((self.version(), self.revision()) >= (VERSION, DEFAULT_GROUPS_REVISION)).then(|| {
+            self.manifest
+                .default_groups
+                .clone()
+                .unwrap_or_else(|| DefaultGroups::from_groups(vec![DEV_DEPENDENCIES.clone()]))
+        })
+    }
+
+    /// Return the dependency group metadata recorded for workspace members.
+    ///
+    /// `None` means the lockfile predates this metadata; an absent group in a returned map has no
+    /// group-specific metadata.
+    pub fn member_group_metadata(
+        &self,
+    ) -> Option<impl Iterator<Item = (&PackageName, &BTreeMap<GroupName, GroupMetadata>)>> {
+        ((self.version(), self.revision()) >= (VERSION, MEMBER_GROUP_METADATA_REVISION)).then(
+            || {
+                self.workspace_packages()
+                    .filter(|package| !package.group_requires_python.is_empty())
+                    .map(|package| (&package.id.name, &package.group_requires_python))
+            },
+        )
+    }
+
+    /// Return dependency group metadata for a workspace root without a `[project]` table.
+    pub fn workspace_group_metadata(&self) -> &BTreeMap<GroupName, GroupMetadata> {
+        &self.manifest.group_requires_python
+    }
+
+    /// Return a workspace member's default groups, assuming `dev` when not recorded.
+    ///
+    /// Returns `None` if the lockfile predates this metadata or the name is not a workspace member.
+    /// A single-project lockfile's root counts as a member even when the workspace member list is
+    /// omitted.
+    pub fn member_default_groups(&self, name: &PackageName) -> Option<DefaultGroups> {
+        if (self.version(), self.revision()) < (VERSION, DEFAULT_GROUPS_REVISION) {
+            return None;
+        }
+        let index = *self.workspace_members.get(name)?;
+        Some(
+            self.package(index)
+                .default_groups
+                .clone()
+                .unwrap_or_else(|| DefaultGroups::from_groups(vec![DEV_DEPENDENCIES.clone()])),
+        )
+    }
+
+    /// Return local workspace member names and their paths relative to the workspace root.
+    pub fn workspace_member_paths(&self) -> impl Iterator<Item = (&PackageName, &Path)> {
+        self.workspace_packages().filter_map(|package| {
+            let path = match &package.id.source {
+                Source::Directory(path) | Source::Editable(path) | Source::Virtual(path) => {
+                    path.as_ref()
+                }
+                Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(_) => {
+                    return None;
+                }
+            };
+            Some((package.name(), path))
+        })
+    }
+
     /// Returns `true` if the package is a workspace member.
     fn is_workspace_member(&self, package: &Package) -> bool {
-        self.members().contains(&package.id.name)
-            || self.members().is_empty() && self.root().is_some_and(|root| root.id == package.id)
+        self.workspace_members
+            .get(&package.id.name)
+            .is_some_and(|&index| self.package(index).id == package.id)
+    }
+
+    /// Return the workspace packages, including the implicit single-project root.
+    fn workspace_packages(&self) -> impl Iterator<Item = &Package> {
+        self.workspace_members
+            .values()
+            .map(|&index| self.package(index))
     }
 
     /// Returns the root requirements that were used to generate this lock.
@@ -3350,34 +3557,14 @@ impl Lock {
             }
         }
 
-        // Identify workspace members (the implicit root counts for single-member workspaces).
-        let workspace_members: FxHashSet<PackageIndex> = if self.members().is_empty() {
-            self.root()
-                .into_iter()
-                .map(|package| self.by_id[&package.id])
-                .collect()
-        } else {
-            self.packages
-                .iter()
-                .enumerate()
-                .filter(|(_, package)| self.members().contains(&package.id.name))
-                .map(|(index, _)| PackageIndex(index))
-                .collect()
-        };
-
         // Lockfile traversal state: (package, optional extra to activate on that package).
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut seen: FxHashSet<(PackageIndex, Option<&ExtraName>)> = FxHashSet::default();
 
         // Seed from workspace members. Always queue with `None` so that we can traverse
         // their dependency groups; only queue extras when prod mode is active.
-        for (index, package) in self
-            .packages
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| workspace_members.contains(&PackageIndex(*index)))
-        {
-            let index = PackageIndex(index);
+        for &index in self.workspace_members.values() {
+            let package = self.package(index);
             if seen.insert((index, None)) {
                 queue.push_back((index, None));
             }
@@ -3438,7 +3625,7 @@ impl Lock {
 
         while let Some((index, extra)) = queue.pop_front() {
             let package = self.package(index);
-            let is_member = workspace_members.contains(&index);
+            let is_member = self.is_workspace_member(package);
 
             // Collect non-workspace packages that have version information
             // and pass the caller's filter.
@@ -3486,10 +3673,11 @@ impl Lock {
     /// Return the workspace root used to generate this lock.
     pub fn root(&self) -> Option<&Package> {
         self.packages.iter().find(|package| {
-            let (Source::Editable(path) | Source::Virtual(path)) = &package.id.source else {
-                return false;
-            };
-            path.as_ref() == Path::new("")
+            if let Source::Directory(path) = &package.id.source {
+                self.members().contains(package.name()) && path.as_ref() == Path::new("")
+            } else {
+                package.id.source.is_implicit_root()
+            }
         })
     }
 
@@ -3644,11 +3832,7 @@ impl Lock {
 
     /// Return whether a source tree belongs to the workspace or represents its root.
     fn is_workspace_package(&self, package: &Package) -> bool {
-        self.members().contains(&package.id.name)
-            || matches!(
-                &package.id.source,
-                Source::Editable(path) | Source::Virtual(path) if path.as_ref() == Path::new("")
-            )
+        self.members().contains(&package.id.name) || package.id.source.is_implicit_root()
     }
 
     /// Returns the package with the given name. If there are multiple
@@ -4026,6 +4210,8 @@ impl Lock {
         excludes: &[ExcludeDependency],
         build_constraints: &Constraints,
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
+        workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
         indexes: Option<&IndexLocations>,
         tags: &Tags,
@@ -4036,8 +4222,6 @@ impl Lock {
         database: &DistributionDatabase<'_, Context>,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'_>, LockError> {
-        let allow_missing_package_metadata =
-            allow_missing_package_metadata && self.supports_missing_package_metadata();
         let mut queue: VecDeque<PackageIndex> = VecDeque::new();
         let mut seen = FxHashSet::default();
         let mut activated_extras: FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>> =
@@ -4052,6 +4236,65 @@ impl Lock {
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedMembers(expected, actual));
             }
+        }
+
+        // Older lockfiles did not record defaults, so they remain valid without this check.
+        if let Some(actual) = self.configured_member_default_groups() {
+            let expected = nonstandard_member_default_groups(
+                packages
+                    .iter()
+                    .filter_map(|(name, member)| {
+                        member
+                            .pyproject_toml()
+                            .configured_default_groups()
+                            .cloned()
+                            .map(|groups| (name.clone(), groups))
+                    })
+                    .collect(),
+            );
+            let actual = nonstandard_member_default_groups(
+                actual
+                    .map(|(name, groups)| (name.clone(), groups.clone()))
+                    .collect(),
+            );
+            if expected != actual {
+                return Ok(SatisfiesResult::MismatchedMemberDefaultGroups(
+                    expected, actual,
+                ));
+            }
+        }
+
+        // Older lockfiles did not record root defaults, so they remain valid without this check.
+        if let Some(expected) = workspace_default_groups
+            && let Some(actual) = self.workspace_default_groups()
+            && *expected != actual
+        {
+            return Ok(SatisfiesResult::MismatchedWorkspaceDefaultGroups(
+                expected.clone(),
+                actual,
+            ));
+        }
+
+        if let Some(actual) = self.member_group_metadata() {
+            let expected = collect_member_group_metadata(packages)?;
+            let actual = actual
+                .map(|(name, groups)| (name.clone(), groups.clone()))
+                .collect();
+            if expected != actual {
+                return Ok(SatisfiesResult::MismatchedMemberGroupMetadata(
+                    expected, actual,
+                ));
+            }
+        }
+
+        // Missing metadata is equivalent to having no group-specific Python requirements.
+        // A lockfile must be updated when the workspace declares an unrecorded requirement.
+        let actual = self.workspace_group_metadata();
+        if workspace_group_metadata != actual {
+            return Ok(SatisfiesResult::MismatchedWorkspaceGroupMetadata(
+                workspace_group_metadata.clone(),
+                actual,
+            ));
         }
 
         // Validate that the member sources have not changed (e.g., that they've switched from
@@ -4467,9 +4710,7 @@ impl Lock {
             // Validating a direct URL package requires retrieving metadata from the remote
             // artifact. In offline mode, preserve the metadata captured in the lockfile rather
             // than requiring that artifact to already be present in the cache.
-            if matches!(&package.id.source, Source::Direct(..))
-                && database.client().unmanaged.connectivity().is_offline()
-            {
+            if matches!(&package.id.source, Source::Direct(..)) && database.client().is_offline() {
                 trace!(
                     "Skipping metadata validation for `{}` because its direct URL cannot be refreshed while offline",
                     package.id
@@ -5867,6 +6108,23 @@ pub enum SatisfiesResult<'lock> {
     Satisfied,
     /// The lockfile uses a different set of workspace members.
     MismatchedMembers(BTreeSet<PackageName>, &'lock BTreeSet<PackageName>),
+    /// The lockfile records different default groups for workspace members.
+    MismatchedMemberDefaultGroups(
+        BTreeMap<PackageName, DefaultGroups>,
+        BTreeMap<PackageName, DefaultGroups>,
+    ),
+    /// The lockfile records different dependency group metadata for the workspace root.
+    MismatchedWorkspaceGroupMetadata(
+        BTreeMap<GroupName, GroupMetadata>,
+        &'lock BTreeMap<GroupName, GroupMetadata>,
+    ),
+    /// The lockfile records different default groups for a non-project workspace root.
+    MismatchedWorkspaceDefaultGroups(DefaultGroups, DefaultGroups),
+    /// The lockfile records different dependency group metadata.
+    MismatchedMemberGroupMetadata(
+        BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
+        BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>,
+    ),
     /// A workspace member switched from virtual to non-virtual or vice versa.
     MismatchedVirtual(PackageName, bool),
     /// A workspace member switched from editable to non-editable or vice versa.
@@ -6039,6 +6297,12 @@ pub struct ResolverManifest {
     /// The workspace members included in the lockfile.
     #[serde(default)]
     members: BTreeSet<PackageName>,
+    /// Default dependency groups for a workspace root without a `[project]` table.
+    #[serde(default)]
+    default_groups: Option<DefaultGroups>,
+    /// The effective Python requirements of the root's dependency groups.
+    #[serde(default)]
+    group_requires_python: BTreeMap<GroupName, GroupMetadata>,
     /// The requirements provided to the resolver, exclusive of the workspace members.
     ///
     /// These are requirements that are attached to the project, but not to any of its
@@ -6069,6 +6333,55 @@ pub struct ResolverManifest {
     dependency_metadata: BTreeSet<StaticMetadata>,
 }
 
+/// Omit entries equivalent to the implicit `dev` default.
+fn nonstandard_member_default_groups(
+    mut groups: BTreeMap<PackageName, DefaultGroups>,
+) -> BTreeMap<PackageName, DefaultGroups> {
+    groups.retain(|_, groups| {
+        if let DefaultGroups::List(groups) = groups {
+            groups.as_slice() != [DEV_DEPENDENCIES.clone()]
+        } else {
+            true
+        }
+    });
+    groups
+}
+
+/// Metadata for a dependency group.
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct GroupMetadata {
+    /// The effective Python requirement, including requirements from included groups.
+    pub requires_python: Option<VersionSpecifiers>,
+}
+
+/// Collect metadata for each member's dependency groups.
+fn collect_member_group_metadata(
+    packages: &BTreeMap<PackageName, WorkspaceMember>,
+) -> Result<BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>, DependencyGroupError> {
+    let mut members = BTreeMap::new();
+    for (name, member) in packages {
+        let groups =
+            FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?
+                .into_iter()
+                .filter_map(|(group, flat)| {
+                    flat.requires_python.map(|requires_python| {
+                        (
+                            group,
+                            GroupMetadata {
+                                requires_python: Some(requires_python),
+                            },
+                        )
+                    })
+                })
+                .collect::<BTreeMap<_, _>>();
+        if !groups.is_empty() {
+            members.insert(name.clone(), groups);
+        }
+    }
+    Ok(members)
+}
+
 impl ResolverManifest {
     /// Initialize a [`ResolverManifest`] with the given members, requirements, constraints, and
     /// overrides.
@@ -6085,6 +6398,8 @@ impl ResolverManifest {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
         Self {
             members: members.into_iter().collect(),
+            default_groups: None,
+            group_requires_python: BTreeMap::new(),
             requirements: normalize_collection::<_, NormalizedRequirements>(
                 requirements,
                 normalize,
@@ -6114,6 +6429,8 @@ impl ResolverManifest {
     pub fn relative_to(self, root: &Path) -> Result<Self, io::Error> {
         Ok(Self {
             members: self.members,
+            default_groups: self.default_groups,
+            group_requires_python: self.group_requires_python,
             requirements: self
                 .requirements
                 .into_iter()
@@ -6310,6 +6627,10 @@ pub struct Package {
     optional_dependencies: BTreeMap<ExtraName, Vec<Dependency>>,
     /// The resolved PEP 735 dependency groups of the package.
     dependency_groups: BTreeMap<GroupName, Vec<Dependency>>,
+    /// Nonstandard default dependency groups configured by the package.
+    default_groups: Option<DefaultGroups>,
+    /// Effective Python requirements for the package's dependency groups.
+    group_requires_python: BTreeMap<GroupName, GroupMetadata>,
     /// The exact requirements from the package metadata.
     metadata: PackageMetadata,
 }
@@ -6331,13 +6652,8 @@ impl Package {
         let metadata = if id.source.is_immutable() {
             PackageMetadata::default()
         } else {
-            PackageMetadata::from_distribution(
-                annotated_dist
-                    .metadata
-                    .as_ref()
-                    .expect("metadata is present"),
-                root,
-            )?
+            let metadata = annotated_dist.metadata().expect("metadata is present");
+            PackageMetadata::from_distribution(metadata, root, annotated_dist.role)?
         };
         Ok(Self {
             id,
@@ -6347,6 +6663,8 @@ impl Package {
             dependencies: vec![],
             optional_dependencies: BTreeMap::default(),
             dependency_groups: BTreeMap::default(),
+            default_groups: None,
+            group_requires_python: BTreeMap::new(),
             metadata,
         })
     }
@@ -6437,7 +6755,7 @@ impl Package {
                     Source::Direct(url, direct) => {
                         let filename: WheelFilename =
                             self.wheels[best_wheel_index].filename.clone();
-                        let url = DisplaySafeUrl::from(ParsedArchiveUrl {
+                        let url = SafeUrl::from(ParsedArchiveUrl {
                             url: url.to_url().map_err(LockErrorKind::InvalidUrl)?,
                             subdirectory: direct.subdirectory.clone(),
                             ext: DistExtension::Wheel,
@@ -6475,7 +6793,7 @@ impl Package {
                         )?;
 
                         // Reconstruct the PEP 508-compatible URL from the `GitSource`.
-                        let url = DisplaySafeUrl::from(ParsedGitPathUrl {
+                        let url = SafeUrl::from(ParsedGitPathUrl {
                             url: git_url.clone(),
                             install_path: install_path.clone(),
                             ext: DistExtension::Wheel,
@@ -6693,7 +7011,7 @@ impl Package {
                     };
 
                     // Reconstruct the PEP 508-compatible URL from the `GitSource`.
-                    let url = DisplaySafeUrl::from(ParsedGitPathUrl {
+                    let url = SafeUrl::from(ParsedGitPathUrl {
                         url: git_url.clone(),
                         install_path: install_path.clone(),
                         ext: DistExtension::Source(ext),
@@ -6709,7 +7027,7 @@ impl Package {
                     uv_distribution_types::SourceDist::GitPath(git_dist)
                 } else {
                     // Reconstruct the PEP 508-compatible URL from the `GitSource`.
-                    let url = DisplaySafeUrl::from(ParsedGitDirectoryUrl {
+                    let url = SafeUrl::from(ParsedGitDirectoryUrl {
                         url: git_url.clone(),
                         subdirectory: git.subdirectory.clone(),
                     });
@@ -6742,7 +7060,7 @@ impl Package {
                     .into());
                 }
                 let location = url.to_url().map_err(LockErrorKind::InvalidUrl)?;
-                let url = DisplaySafeUrl::from(ParsedArchiveUrl {
+                let url = SafeUrl::from(ParsedArchiveUrl {
                     url: location.clone(),
                     subdirectory: direct.subdirectory.clone(),
                     ext: DistExtension::Source(ext),
@@ -6832,12 +7150,11 @@ impl Package {
                         path: file_path, ..
                     } => {
                         let file_path = workspace_root.join(path).join(file_path);
-                        let file_url =
-                            DisplaySafeUrl::from_file_path(&file_path).map_err(|()| {
-                                LockErrorKind::PathToUrl {
-                                    path: file_path.into_boxed_path(),
-                                }
-                            })?;
+                        let file_url = SafeUrl::from_file_path(&file_path).map_err(|()| {
+                            LockErrorKind::PathToUrl {
+                                path: file_path.into_boxed_path(),
+                            }
+                        })?;
                         FileLocation::AbsoluteUrl(UrlString::from(file_url))
                     }
                     SourceDist::Metadata { .. } => {
@@ -7034,7 +7351,7 @@ impl Package {
     }
 
     /// Returns the dependency groups the package provides, if any.
-    pub fn dependency_groups(&self) -> &BTreeMap<GroupName, BTreeSet<Requirement>> {
+    pub fn dependency_groups(&self) -> &BTreeMap<GroupName, Box<[Requirement]>> {
         &self.metadata.dependency_groups
     }
 
@@ -7104,13 +7421,29 @@ struct PackageWire {
     dependencies: Vec<DependencyWire>,
     #[serde(default)]
     optional_dependencies: BTreeMap<ExtraName, Vec<DependencyWire>>,
+    #[serde(default)]
+    default_groups: Option<DefaultGroups>,
     #[serde(default, rename = "dev-dependencies", alias = "dependency-groups")]
     dependency_groups: BTreeMap<GroupName, Vec<DependencyWire>>,
+    #[serde(default)]
+    group_requires_python: BTreeMap<GroupName, GroupMetadata>,
 }
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(from = "PackageMetadataWire")]
 struct PackageMetadata {
+    requires_dist: Box<[Requirement]>,
+    provides_extra: Box<[ExtraName]>,
+    dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(
+    rename = "PackageMetadata",
+    rename_all = "kebab-case",
+    expecting = "struct PackageMetadata"
+)]
+struct PackageMetadataWire {
     #[serde(default)]
     requires_dist: BTreeSet<Requirement>,
     #[serde(default, rename = "provides-extras")]
@@ -7119,14 +7452,47 @@ struct PackageMetadata {
     dependency_groups: BTreeMap<GroupName, BTreeSet<Requirement>>,
 }
 
+impl From<PackageMetadataWire> for PackageMetadata {
+    fn from(wire: PackageMetadataWire) -> Self {
+        // The lock only reads these sets. Keep their canonical order without retaining spare
+        // B-tree slots for each package and dependency group.
+        Self {
+            requires_dist: wire.requires_dist.into_iter().collect(),
+            provides_extra: wire.provides_extra,
+            dependency_groups: wire
+                .dependency_groups
+                .into_iter()
+                .map(|(group, requirements)| (group, requirements.into_iter().collect()))
+                .collect(),
+        }
+    }
+}
+
 impl PackageMetadata {
-    fn from_distribution(metadata: &DistributionMetadata, root: &Path) -> Result<Self, LockError> {
+    fn from_distribution(
+        metadata: &DistributionMetadata,
+        root: &Path,
+        package_role: PackageRole,
+    ) -> Result<Self, LockError> {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
+        // We normally write dependency paths relative to the lockfile. For the current project and
+        // workspace members, preserve the user's choice of relative or absolute paths instead.
+        // Metadata from `tool.uv.dependency-metadata` already preserves that choice.
+        // Apply the path policy to the cloned requirements so shared metadata remains unchanged.
+        let relative_requirement = |requirement: &Requirement| {
+            let mut requirement = requirement.clone();
+            match package_role {
+                PackageRole::Project | PackageRole::WorkspaceMember => {
+                    requirement.set_force_relative(false);
+                }
+                PackageRole::Dependency => {}
+            }
+            requirement.relative_to(root)
+        };
         let requires_dist = metadata
             .requires_dist
             .iter()
-            .cloned()
-            .map(|requirement| requirement.relative_to(root))
+            .map(&relative_requirement)
             .collect::<Result<Vec<_>, _>>()
             .map(|requirements| {
                 normalize_collection::<_, NormalizedRequirements>(requirements, normalize)
@@ -7138,8 +7504,7 @@ impl PackageMetadata {
             .map(|(group, requirements)| {
                 let requirements = requirements
                     .iter()
-                    .cloned()
-                    .map(|requirement| requirement.relative_to(root))
+                    .map(&relative_requirement)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|requirements| {
                         normalize_collection::<_, NormalizedRequirements>(requirements, normalize)
@@ -7149,11 +7514,11 @@ impl PackageMetadata {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(Self {
+        Ok(Self::from(PackageMetadataWire {
             requires_dist,
             provides_extra: metadata.provides_extra.clone(),
             dependency_groups,
-        })
+        }))
     }
 }
 
@@ -7220,6 +7585,8 @@ impl PackageWire {
         Ok(Package {
             id: self.id,
             metadata: self.metadata,
+            default_groups: self.default_groups,
+            group_requires_python: self.group_requires_python,
             sdist: self.sdist,
             wheels: self.wheels,
             fork_markers: self
@@ -7260,8 +7627,7 @@ impl PackageId {
         // Omit versions for dynamic source trees.
         let version = if source.is_source_tree()
             && annotated_dist
-                .metadata
-                .as_ref()
+                .metadata()
                 .is_some_and(|metadata| metadata.dynamic)
         {
             None
@@ -7501,9 +7867,9 @@ impl Source {
                 Ok(Self::Registry(source))
             }
             IndexUrl::Path(url) => {
-                let path = url
-                    .to_file_path()
-                    .map_err(|()| LockErrorKind::UrlToPath { url: url.to_url() })?;
+                let path = url.to_file_path().map_err(|()| LockErrorKind::UrlToPath {
+                    url: url.to_url().into_url(),
+                })?;
                 let path = try_relative_to_if(&path, root, url.prefers_relative())
                     .map_err(LockErrorKind::IndexRelativePath)?;
                 let source = RegistrySource::Path(path.into_boxed_path());
@@ -7593,7 +7959,7 @@ impl Source {
                 let expected = expected
                     .to_file_path()
                     .map_err(|()| LockErrorKind::UrlToPath {
-                        url: expected.to_url(),
+                        url: expected.to_url().into_url(),
                     })?;
                 normalize_path(root.join(actual)).as_ref() == normalize_path(expected).as_ref()
             }
@@ -7615,7 +7981,7 @@ impl Source {
                 actual.remove_credentials();
                 let mut expected = location.clone();
                 expected.remove_credentials();
-                normalize_url(actual) == normalize_url(expected)
+                normalize_url(actual) == normalize_url(expected.into_url())
                     && source.subdirectory == *subdirectory
             }
             (Self::Path(path), RequirementSource::Path { install_path, .. }) => {
@@ -7752,6 +8118,20 @@ impl Display for Source {
 }
 
 impl Source {
+    /// Return whether this source identifies an implicit single-project root.
+    ///
+    /// Directory sources require explicit workspace membership.
+    fn is_implicit_root(&self) -> bool {
+        match self {
+            Self::Editable(path) | Self::Virtual(path) => path.as_ref() == Path::new(""),
+            Self::Registry(_)
+            | Self::Git(..)
+            | Self::Direct(..)
+            | Self::Path(_)
+            | Self::Directory(_) => false,
+        }
+    }
+
     fn name(&self) -> &str {
         match self {
             Self::Registry(..) => "registry",
@@ -7817,7 +8197,7 @@ impl TryFrom<SourceWire> for Source {
         match wire {
             Registry { registry } => Ok(Self::Registry(registry.into())),
             Git { git } => {
-                let url = DisplaySafeUrl::parse(&git)
+                let url = SafeUrl::parse(&git)
                     .map_err(|err| SourceParseError::InvalidUrl {
                         given: git.clone(),
                         err,
@@ -7979,7 +8359,7 @@ enum GitSourceError {
 impl GitSource {
     /// Extracts a Git source reference from the query pairs and the hash
     /// fragment in the given URL.
-    fn from_url(url: &Url) -> Result<Self, GitSourceError> {
+    fn from_url(url: &SafeUrl) -> Result<Self, GitSourceError> {
         let mut kind = GitSourceKind::DefaultBranch;
         let mut subdirectory = None;
         let mut lfs = GitLfs::Disabled;
@@ -8006,8 +8386,8 @@ impl GitSource {
         // A full commit requested as `rev` is already precise and must not resolve to another
         // commit through the lockfile fragment.
         if let GitSourceKind::Rev(revision) = &kind
-            && GitOid::from_str(revision).is_ok()
-            && !revision.eq_ignore_ascii_case(precise.as_str())
+            && let Some(commit) = GitReference::from_rev(revision.clone()).as_commit()
+            && commit != precise
         {
             return Err(GitSourceError::RevisionMismatch {
                 revision: revision.clone(),
@@ -8255,9 +8635,9 @@ impl SourceDist {
                 }))
             }
             IndexUrl::Path(path) => {
-                let index_path = path
-                    .to_file_path()
-                    .map_err(|()| LockErrorKind::UrlToPath { url: path.to_url() })?;
+                let index_path = path.to_file_path().map_err(|()| LockErrorKind::UrlToPath {
+                    url: path.to_url().into_url(),
+                })?;
                 let url = reg_dist
                     .file
                     .url
@@ -8369,6 +8749,7 @@ impl SourceDist {
 impl From<GitReference> for GitSourceKind {
     fn from(value: GitReference) -> Self {
         match value {
+            GitReference::Commit(commit) => Self::Rev(commit.to_string()),
             GitReference::Branch(branch) => Self::Branch(branch),
             GitReference::Tag(tag) => Self::Tag(tag),
             GitReference::BranchOrTag(rev) => Self::Rev(rev),
@@ -8390,12 +8771,8 @@ impl From<GitSourceKind> for GitReference {
     }
 }
 
-/// Construct the lockfile-compatible [`DisplaySafeUrl`] for a [`GitUrl`].
-fn locked_git_url(
-    git: &GitUrl,
-    subdirectory: Option<&Path>,
-    path: Option<&Path>,
-) -> DisplaySafeUrl {
+/// Construct the lockfile-compatible [`SafeUrl`] for a [`GitUrl`].
+fn locked_git_url(git: &GitUrl, subdirectory: Option<&Path>, path: Option<&Path>) -> SafeUrl {
     let mut url = git.url().clone();
 
     // Remove the credentials.
@@ -8431,6 +8808,9 @@ fn locked_git_url(
 
     // Put the requested reference in the query.
     match git.reference() {
+        GitReference::Commit(commit) => {
+            url.query_pairs_mut().append_pair("rev", commit.as_str());
+        }
         GitReference::Branch(branch) => {
             url.query_pairs_mut().append_pair("branch", branch.as_str());
         }
@@ -8575,9 +8955,9 @@ impl Wheel {
                 WheelWireSource::Url { url }
             }
             IndexUrl::Path(path) => {
-                let index_path = path
-                    .to_file_path()
-                    .map_err(|()| LockErrorKind::UrlToPath { url: path.to_url() })?;
+                let index_path = path.to_file_path().map_err(|()| LockErrorKind::UrlToPath {
+                    url: path.to_url().into_url(),
+                })?;
                 let wheel_url = wheel.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?;
 
                 if wheel_url.scheme() == "file" {
@@ -8703,12 +9083,11 @@ impl Wheel {
                     }
                     WheelWireSource::Path { path: file_path } => {
                         let file_path = root.join(index_path).join(file_path);
-                        let file_url =
-                            DisplaySafeUrl::from_file_path(&file_path).map_err(|()| {
-                                LockErrorKind::PathToUrl {
-                                    path: file_path.into_boxed_path(),
-                                }
-                            })?;
+                        let file_url = SafeUrl::from_file_path(&file_path).map_err(|()| {
+                            LockErrorKind::PathToUrl {
+                                path: file_path.into_boxed_path(),
+                            }
+                        })?;
                         FileLocation::AbsoluteUrl(UrlString::from(file_url))
                     }
                     WheelWireSource::Filename { .. } => {
@@ -8769,8 +9148,7 @@ struct WheelWire {
     upload_time: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
-#[serde(untagged, rename_all = "kebab-case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum WheelWireSource {
     /// Used for all wheels that come from remote sources.
     Url {
@@ -9060,8 +9438,8 @@ fn normalize_file_location(location: &FileLocation) -> Result<UrlString, ToUrlEr
     }
 }
 
-/// Convert a [`DisplaySafeUrl`] into a normalized [`UrlString`] by removing the fragment.
-fn normalize_url(mut url: DisplaySafeUrl) -> UrlString {
+/// Convert a [`SafeUrl`] into a normalized [`UrlString`] by removing the fragment.
+fn normalize_url(mut url: SafeUrl) -> UrlString {
     url.set_fragment(None);
     UrlString::from(url)
 }
@@ -9168,13 +9546,7 @@ impl WheelTagHint {
     ) -> Option<Self> {
         let incompatibility = filenames
             .iter()
-            .map(|filename| {
-                tags.compatibility(
-                    filename.python_tags().iter(),
-                    filename.abi_tags().iter(),
-                    filename.platform_tags().iter(),
-                )
-            })
+            .map(|filename| filename.compatibility(tags))
             .max()?;
         match incompatibility {
             TagCompatibility::Incompatible(IncompatibleTag::Python) => {
@@ -9468,8 +9840,11 @@ impl std::fmt::Display for WheelTagHint {
 /// For example, if there are two or more duplicative distributions given
 /// to `Lock::new`, then an error is returned. It's likely that the fault
 /// is with the caller somewhere in such cases.
-#[derive(Debug, thiserror::Error)]
+#[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
+    /// An error that occurs when collecting dependency-group settings.
+    #[error(transparent)]
+    DependencyGroups(#[from] DependencyGroupError),
     /// An error that occurs when the overrides for validating a
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
@@ -9773,7 +10148,7 @@ enum LockErrorKind {
     PathToUrl { path: Box<Path> },
     /// An error that occurs when converting a URL to a path
     #[error("Failed to convert URL to path: {url}", url = url.cyan())]
-    UrlToPath { url: DisplaySafeUrl },
+    UrlToPath { url: SafeUrl },
     /// An error that occurs when multiple packages with the same
     /// name were found when identifying the root packages.
     #[error("Found multiple packages matching `{name}`", name = name.cyan())]
@@ -9804,6 +10179,15 @@ enum LockErrorKind {
         package: PackageId,
         /// The ID of the dependency whose inclusion is ambiguous.
         dependency: PackageId,
+    },
+    /// Recursive extra conditions leave a package's export marker undetermined.
+    #[error(
+        "Cannot determine whether to export `{package}` because its dependency markers contain recursive extra conditions",
+        package = package.cyan()
+    )]
+    UnresolvedExportConflict {
+        /// The package whose inclusion remains undetermined.
+        package: PackageId,
     },
     /// An error that occurs when resolving metadata for a package.
     #[error("Failed to generate package metadata for `{id}`", id = id.cyan())]
@@ -9867,7 +10251,7 @@ enum SourceParseError {
         given: String,
         /// The URL parse error.
         #[source]
-        err: DisplaySafeUrlError,
+        err: SafeUrlError,
     },
     /// An error that occurs when a Git URL is missing a precise commit SHA.
     #[error("Missing SHA in source `{given}`")]
@@ -9915,14 +10299,7 @@ fn marker_is_unreachable(requires_python: &RequiresPython, marker: MarkerTree) -
         return false;
     }
 
-    environment.to_dnf().into_iter().all(|conjunction| {
-        let marker = conjunction
-            .into_iter()
-            .fold(MarkerTree::TRUE, |marker, expression| {
-                marker.and(MarkerTree::expression(expression))
-            });
-        requires_python.simplify_markers(marker).is_false()
-    })
+    environment.is_unreachable()
 }
 
 /// Simplify an edge marker using the PEP 508 conditions that must already hold to reach its parent
@@ -10028,6 +10405,10 @@ fn is_wheel_unreachable_for_marker(
     marker: &UniversalMarker,
     tags: Option<&Tags>,
 ) -> bool {
+    // TODO(konsti): Include wheel variants in lockfiles when supported.
+    if filename.variant().is_some() {
+        return true;
+    }
     if let Some(tags) = tags
         && !filename.compatibility(tags).is_compatible()
     {
@@ -10049,6 +10430,12 @@ fn is_wheel_unreachable_for_marker(
     let platform_tags = filename.platform_tags();
 
     if platform_tags.iter().all(PlatformTag::is_any) {
+        return false;
+    }
+
+    // Emulated x86_64 Python on Windows ARM64 reports `ARM64` for `platform_machine` but requires
+    // `win_amd64` wheels. Keep them unless concrete tags or `Requires-Python` already rejected them.
+    if platform_tags.contains(&PlatformTag::WinAmd64) && !marker.is_disjoint(*WINDOWS_ARM_MARKERS) {
         return false;
     }
 
@@ -10239,6 +10626,41 @@ mod tests {
 
     use super::*;
 
+    /// The disjunctions retain an impossible platform combination across decision branches.
+    /// Removing the extra must still leave that combination unreachable.
+    #[test]
+    fn marker_reachability_checks_platform_exclusions() {
+        let requires_python =
+            RequiresPython::from_specifiers(">=3.8".parse().expect("valid bounds"));
+        let extra: MarkerTree = "extra == 'a'".parse().expect("valid marker");
+        let posix: MarkerTree = "os_name == 'posix'".parse().expect("valid marker");
+        let windows: MarkerTree = "sys_platform == 'win32'".parse().expect("valid marker");
+        let marker = posix.or(extra).and(windows.or(extra)).and(extra.negate());
+
+        assert!(marker_is_unreachable(&requires_python, marker));
+        assert!(!marker_is_unreachable(&requires_python, marker.or(windows)));
+    }
+
+    /// A reachable Python branch can mask incompatible platforms until the project's
+    /// Python bounds eliminate it.
+    #[test]
+    fn marker_reachability_checks_python_bounds() {
+        let python: MarkerTree = "python_full_version < '3.10'"
+            .parse()
+            .expect("valid marker");
+        let posix: MarkerTree = "os_name == 'posix'".parse().expect("valid marker");
+        let windows: MarkerTree = "sys_platform == 'win32'".parse().expect("valid marker");
+        let marker = posix.or(python).and(windows.or(python));
+
+        let requires_python =
+            RequiresPython::from_specifiers(">=3.8".parse().expect("valid bounds"));
+        assert!(!marker_is_unreachable(&requires_python, marker));
+
+        let requires_python =
+            RequiresPython::from_specifiers(">=3.10".parse().expect("valid bounds"));
+        assert!(marker_is_unreachable(&requires_python, marker));
+    }
+
     /// Assert a given display snapshot, stripping ANSI color codes.
     macro_rules! assert_stripped_snapshot {
         ($expr:expr, @$snapshot:literal) => {{
@@ -10267,7 +10689,7 @@ mod tests {
 
     #[test]
     fn git_source_rejects_mismatched_exact_revision() -> Result<(), Box<dyn Error>> {
-        let url = Url::parse(
+        let url = SafeUrl::parse(
             "https://example.com/repository?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389",
         )?;
         assert_eq!(
@@ -10278,17 +10700,17 @@ mod tests {
             })
         );
 
-        let url = Url::parse(
+        let url = SafeUrl::parse(
             "https://example.com/repository?rev=0DACFD662C64CB4CEB16E6CF65A157A8B715B979#0dacfd662c64cb4ceb16e6cf65a157a8b715b979",
         )?;
         assert!(GitSource::from_url(&url).is_ok());
 
-        let url = Url::parse(
+        let url = SafeUrl::parse(
             "https://example.com/repository?rev=0dacfd6#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389",
         )?;
         assert!(GitSource::from_url(&url).is_ok());
 
-        let url = Url::parse(
+        let url = SafeUrl::parse(
             "https://example.com/repository?branch=0dacfd662c64cb4ceb16e6cf65a157a8b715b979#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389",
         )?;
         assert!(GitSource::from_url(&url).is_ok());
@@ -10319,7 +10741,9 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
         )
         .expect("valid lock");
         let root = std::env::current_dir().expect("current directory");
-        let hasher = lock.hash_strategy(&root).expect("valid source paths");
+        let hasher = lock
+            .hash_strategy(&root, &FxHashSet::default())
+            .expect("valid source paths");
         let digest = HashDigest::from_str(
             "sha256:53a42340ae36747fb1471f9b4b7958be1f6e2e5fc234f931aafa3e454fd31dfb",
         )
@@ -10327,7 +10751,7 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
         let remote = "https://example.com/remote-1.0.0-py3-none-any.whl"
             .parse()
             .expect("valid URL");
-        let local = DisplaySafeUrl::from_file_path(root.join("local-1.0.0-py3-none-any.whl"))
+        let local = SafeUrl::from_file_path(root.join("local-1.0.0-py3-none-any.whl"))
             .expect("valid file URL");
         let unknown = "https://example.com/unknown-1.0.0-py3-none-any.whl"
             .parse()

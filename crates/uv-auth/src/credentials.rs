@@ -21,10 +21,9 @@ use reqwest::Request;
 use reqwest::header::{HeaderValue, InvalidHeaderValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use url::Url;
 
 use uv_netrc::Netrc;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,21 +199,18 @@ impl Credentials {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    /// Whether these credentials contain neither basic authentication fields nor a bearer token.
+    pub fn is_empty(&self) -> bool {
         match self {
             Self::Basic { username, password } => username.is_none() && password.is_none(),
             Self::Bearer { token } => token.is_empty(),
         }
     }
 
-    /// Return [`Credentials`] for a [`Url`] from a [`Netrc`] file, if any.
+    /// Return [`Credentials`] for a [`SafeUrl`] from a [`Netrc`] file, if any.
     ///
     /// If a username is provided, it must match the login in the netrc file or [`None`] is returned.
-    pub(crate) fn from_netrc(
-        netrc: &Netrc,
-        url: &DisplaySafeUrl,
-        username: Option<&str>,
-    ) -> Option<Self> {
+    pub(crate) fn from_netrc(netrc: &Netrc, url: &SafeUrl, username: Option<&str>) -> Option<Self> {
         let host = url.host_str()?;
         let entry = netrc
             .hosts
@@ -234,8 +230,8 @@ impl Credentials {
 
     /// Parse [`Credentials`] from a URL, if any.
     ///
-    /// Returns [`None`] if both [`Url::username`] and [`Url::password`] are not populated.
-    pub fn from_url(url: &Url) -> Result<Option<Self>, CredentialsFromUrlError> {
+    /// Returns [`None`] if the username is empty and no password is present.
+    pub fn from_url(url: &SafeUrl) -> Result<Option<Self>, CredentialsFromUrlError> {
         if url.username().is_empty() && url.password().is_none() {
             return Ok(None);
         }
@@ -287,7 +283,7 @@ impl Credentials {
     /// Only HTTP Basic Authentication is supported.
     pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
         // First, attempt to retrieve the credentials from the URL
-        if let Some(credentials) = Self::from_url(request.url())? {
+        if let Some(credentials) = Self::from_url(SafeUrl::ref_cast(request.url()))? {
             return Ok(Some(credentials));
         }
 
@@ -373,7 +369,7 @@ impl Credentials {
     ///
     /// Any existing credentials will be overridden.
     #[must_use]
-    pub fn apply(&self, mut url: DisplaySafeUrl) -> DisplaySafeUrl {
+    pub fn apply(&self, mut url: SafeUrl) -> SafeUrl {
         if let Some(username) = self.username() {
             let _ = url.set_username(username);
         }
@@ -696,13 +692,13 @@ mod tests {
 
     #[test]
     fn from_url_no_credentials() {
-        let url = &Url::parse("https://example.com/simple/first/").unwrap();
+        let url = &SafeUrl::parse("https://example.com/simple/first/").unwrap();
         assert_matches!(Credentials::from_url(url), Ok(None));
     }
 
     #[test]
     fn from_url_username_and_password() {
-        let url = &Url::parse("https://example.com/simple/first/").unwrap();
+        let url = &SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password")).unwrap();
@@ -713,21 +709,21 @@ mod tests {
 
     #[test]
     fn from_url_invalid_utf8_username() {
-        let url = Url::parse("https://%FF:password@example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://%FF:password@example.com/simple/first/").unwrap();
         let error = Credentials::from_url(&url).unwrap_err();
         assert_snapshot!(error, @"URL username contains invalid UTF-8");
     }
 
     #[test]
     fn from_url_invalid_utf8_password() {
-        let url = Url::parse("https://user:%FF@example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://user:%FF@example.com/simple/first/").unwrap();
         let error = Credentials::from_url(&url).unwrap_err();
         assert_snapshot!(error, @"URL password contains invalid UTF-8");
     }
 
     #[test]
     fn from_url_no_username() {
-        let url = &Url::parse("https://example.com/simple/first/").unwrap();
+        let url = &SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_password(Some("password")).unwrap();
         let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
@@ -742,7 +738,7 @@ mod tests {
     #[test]
     fn from_url_empty_username_with_password() {
         // Parse a URL with the format `:password@host` directly
-        let url = Url::parse("https://:token@example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://:token@example.com/simple/first/").unwrap();
         let credentials = Credentials::from_url(&url).unwrap().unwrap();
         assert_eq!(credentials.username(), None);
         assert_eq!(credentials.password(), Some("token"));
@@ -754,7 +750,7 @@ mod tests {
 
     #[test]
     fn from_url_no_password() {
-        let url = &Url::parse("https://example.com/simple/first/").unwrap();
+        let url = &SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
@@ -764,13 +760,13 @@ mod tests {
 
     #[test]
     fn authenticated_request_from_url() {
-        let url = Url::parse("https://example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password")).unwrap();
         let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
-        let mut request = Request::new(reqwest::Method::GET, url);
+        let mut request = Request::new(reqwest::Method::GET, url.into_unsafe_url());
         request = credentials.authenticate(request).unwrap();
 
         let mut header = request
@@ -786,13 +782,13 @@ mod tests {
 
     #[test]
     fn authenticated_request_from_url_with_percent_encoded_user() {
-        let url = Url::parse("https://example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user@domain").unwrap();
         auth_url.set_password(Some("password")).unwrap();
         let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
-        let mut request = Request::new(reqwest::Method::GET, url);
+        let mut request = Request::new(reqwest::Method::GET, url.into_unsafe_url());
         request = credentials.authenticate(request).unwrap();
 
         let mut header = request
@@ -808,13 +804,13 @@ mod tests {
 
     #[test]
     fn authenticated_request_from_url_with_percent_encoded_password() {
-        let url = Url::parse("https://example.com/simple/first/").unwrap();
+        let url = SafeUrl::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password==")).unwrap();
         let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
-        let mut request = Request::new(reqwest::Method::GET, url);
+        let mut request = Request::new(reqwest::Method::GET, url.into_unsafe_url());
         request = credentials.authenticate(request).unwrap();
 
         let mut header = request
@@ -837,7 +833,9 @@ mod tests {
 
         let request = Request::new(
             reqwest::Method::GET,
-            Url::parse("https://account.blob.core.windows.net/container/blob.whl").unwrap(),
+            SafeUrl::parse("https://account.blob.core.windows.net/container/blob.whl")
+                .unwrap()
+                .into_unsafe_url(),
         );
         let request = authentication.authenticate(request).await.unwrap();
 
@@ -857,7 +855,9 @@ mod tests {
 
         let request = Request::new(
             reqwest::Method::GET,
-            Url::parse("https://s3.amazonaws.com/bucket/blob.whl").unwrap(),
+            SafeUrl::parse("https://s3.amazonaws.com/bucket/blob.whl")
+                .unwrap()
+                .into_unsafe_url(),
         );
         let err = authentication.authenticate(request).await.unwrap_err();
 
@@ -875,7 +875,9 @@ mod tests {
 
         let request = Request::new(
             reqwest::Method::GET,
-            Url::parse("https://account.blob.core.windows.net/container/blob.whl").unwrap(),
+            SafeUrl::parse("https://account.blob.core.windows.net/container/blob.whl")
+                .unwrap()
+                .into_unsafe_url(),
         );
         let err = authentication.authenticate(request).await.unwrap_err();
 

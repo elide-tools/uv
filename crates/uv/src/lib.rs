@@ -1,4 +1,25 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+// Builds with command surfaces gated off leave some shared imports and dispatch state unused.
+#![cfg_attr(
+    not(all(
+        feature = "audit",
+        feature = "auth",
+        feature = "build",
+        feature = "cache",
+        feature = "init",
+        feature = "pip",
+        feature = "project",
+        feature = "publish",
+        feature = "python",
+        feature = "python-managed",
+        feature = "run",
+        feature = "self-commands",
+        feature = "tool",
+        feature = "venv",
+        feature = "workspace"
+    )),
+    allow(unused_imports, unused_variables)
+)]
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -14,17 +35,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
 use clap::{CommandFactory, Error, Parser};
+#[cfg(feature = "project")]
 use futures::FutureExt;
 use owo_colors::OwoColorize;
-#[cfg(feature = "pip")]
-use settings::PipTreeSettings;
+#[cfg(feature = "build")]
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
-#[cfg(not(feature = "self-update"))]
+#[cfg(all(feature = "self-commands", not(feature = "self-update")))]
 use crate::install_source::InstallSource;
 use uv_cache::{Cache, Refresh};
+#[cfg(feature = "tool")]
 use uv_cache_info::Timestamp;
+use uv_cli::settings;
+#[cfg(feature = "publish")]
+use uv_cli::settings::PublishSettings;
+use uv_cli::settings::{CacheSettings, GlobalSettings, resolve_color};
+#[cfg(feature = "pip")]
+use uv_cli::settings::{
+    PipCheckSettings, PipCompileSettings, PipFreezeSettings, PipInstallSettings, PipListSettings,
+    PipShowSettings, PipSyncSettings, PipTreeSettings, PipUninstallSettings,
+};
+
 #[cfg(feature = "build")]
 use uv_cli::BuildBackendCommand;
 #[cfg(any(
@@ -36,6 +68,8 @@ use uv_cli::BuildBackendCommand;
 use uv_cli::ProjectCommand;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
+#[cfg(feature = "tool")]
+use uv_cli::TopLevelArgs;
 #[cfg(any(feature = "pip", feature = "venv"))]
 use uv_cli::compat::CompatArgs;
 use uv_cli::options::ArgumentError;
@@ -43,7 +77,7 @@ use uv_cli::options::ArgumentError;
 use uv_cli::{AuthCommand, AuthHelperCommand, AuthNamespace};
 #[cfg(feature = "cache")]
 use uv_cli::{CacheCommand, CacheNamespace, CacheSizeOutputFormat};
-use uv_cli::{Cli, Commands, TopLevelArgs};
+use uv_cli::{Cli, Commands};
 #[cfg(feature = "pip")]
 use uv_cli::{PipCommand, PipNamespace};
 #[cfg(feature = "python")]
@@ -55,16 +89,22 @@ use uv_cli::{ToolCommand, ToolNamespace};
 #[cfg(feature = "workspace")]
 use uv_cli::{WorkspaceCommand, WorkspaceNamespace};
 use uv_client::BaseClientBuilder;
+use uv_command_support::{ExitStatus, Printer, UvError};
+#[cfg(feature = "tool")]
+use uv_configuration::ToolRunCommand;
+#[cfg(all(feature = "python", feature = "python-managed"))]
+use uv_configuration::{PythonUpgrade, PythonUpgradeSource};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
+#[cfg(feature = "venv")]
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
-use uv_python::ConfigDiscovery;
+use uv_python_discovery::ConfigDiscovery;
 #[cfg(feature = "venv")]
-use uv_python::PythonRequest;
+use uv_python_types::PythonRequest;
 #[cfg(feature = "pip")]
 use uv_requirements::GroupsSpecification;
 use uv_requirements::RequirementsSource;
@@ -73,46 +113,34 @@ use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
 use uv_threads::{RAYON_PARALLELISM, min_stack_size};
-use uv_warnings::{warn_user, warn_user_once};
+use uv_warnings::warn_user;
+#[cfg(feature = "venv")]
+use uv_warnings::warn_user_once;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-#[cfg(any(
-    feature = "project",
-    feature = "run",
-    feature = "init",
-    feature = "audit"
-))]
-use crate::commands::ProjectError;
-#[cfg(any(feature = "project", feature = "run"))]
+#[cfg(feature = "project")]
 use crate::commands::ScriptPath;
-#[cfg(feature = "tool")]
-use crate::commands::ToolRunCommand;
-use crate::commands::{ExitStatus, UvError};
 #[cfg(feature = "run")]
 use crate::commands::{ParsedRunCommand, RunCommand};
 // When `run` is off, `RunCommand` is never constructed; alias it to an
-// uninhabited type so `Option<RunCommand>` stays nameable in the (run-gated)
-// project dispatch signatures and `project`-only builds still compile.
-#[cfg(not(feature = "run"))]
+// uninhabited type so `Option<RunCommand>` stays nameable in the project
+// dispatch signature and `project`-only builds still compile.
+#[cfg(all(
+    not(feature = "run"),
+    any(
+        feature = "project",
+        feature = "run",
+        feature = "init",
+        feature = "audit"
+    )
+))]
 type RunCommand = std::convert::Infallible;
-use crate::printer::Printer;
-#[cfg(feature = "publish")]
-use crate::settings::PublishSettings;
-use crate::settings::{CacheSettings, GlobalSettings, resolve_color};
-#[cfg(feature = "pip")]
-use crate::settings::{
-    PipCheckSettings, PipCompileSettings, PipFreezeSettings, PipInstallSettings, PipListSettings,
-    PipShowSettings, PipSyncSettings, PipUninstallSettings,
-};
 
-pub(crate) mod child;
 pub mod commands;
-pub mod embedded_progress;
-#[cfg(not(feature = "self-update"))]
+pub use uv_command_support::embedded_progress;
+#[cfg(all(feature = "self-commands", not(feature = "self-update")))]
 mod install_source;
 mod logging;
-pub(crate) mod printer;
-pub(crate) mod settings;
 
 /// Returns the script path from `uv python find <script>` if matched, `None` otherwise.
 /// Centralized so the `python` feature gate stays out of the surrounding pipeline.
@@ -139,8 +167,8 @@ fn python_find_script_path(_command: &Commands) -> Option<&Path> {
 
 /// Read a PEP 723 script from `path`, failing with a user-facing message when it is missing or
 /// carries no metadata tag.
-async fn read_pep723_script(path: &Path) -> anyhow::Result<Pep723Item> {
-    match Pep723Script::read(&path).await {
+async fn read_pep723_script(path: &Path) -> Result<Pep723Item> {
+    match Pep723Script::read(path).await {
         Ok(Some(script)) => Ok(Pep723Item::Script(script)),
         Ok(None) => bail!(
             "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
@@ -153,15 +181,6 @@ async fn read_pep723_script(path: &Path) -> anyhow::Result<Pep723Item> {
             format!("uv init --script {}", path.user_display()).green()
         ),
         Err(err) => Err(err.into()),
-    }
-}
-
-/// Resolve a PEP 723 script target from a `uv python <script>` invocation, if any.
-async fn pep723_from_python(command: &Commands) -> anyhow::Result<Option<Pep723Item>> {
-    if let Some(script) = python_find_script_path(command) {
-        read_pep723_script(script).await.map(Some)
-    } else {
-        Ok(None)
     }
 }
 
@@ -184,9 +203,12 @@ fn workspace_metadata_script_path(_command: &Commands) -> Option<&Path> {
     None
 }
 
-/// Resolve a PEP 723 script target from a `uv workspace metadata --script` invocation, if any.
-async fn pep723_from_workspace_metadata(command: &Commands) -> anyhow::Result<Option<Pep723Item>> {
-    if let Some(script) = workspace_metadata_script_path(command) {
+/// Resolve a PEP 723 script target from `uv workspace metadata --script` or
+/// `uv python find <script>`, if any.
+async fn pep723_from_workspace_or_python(command: &Commands) -> Result<Option<Pep723Item>> {
+    if let Some(script) =
+        workspace_metadata_script_path(command).or_else(|| python_find_script_path(command))
+    {
         read_pep723_script(script).await.map(Some)
     } else {
         Ok(None)
@@ -195,7 +217,7 @@ async fn pep723_from_workspace_metadata(command: &Commands) -> anyhow::Result<Op
 
 /// Returns `true` for commands that operate at the user-level and should ignore local workspace
 /// configuration. Centralizes the `Commands::Tool(_) | Commands::Self_(_)` check so it compiles
-/// correctly regardless of which features are enabled.
+/// regardless of which features are enabled.
 #[cfg_attr(
     not(any(feature = "tool", feature = "self-commands")),
     allow(unused_variables)
@@ -213,7 +235,7 @@ fn is_user_level_command(command: &Commands) -> bool {
 }
 
 /// Construct the shared HTTP client builder from the resolved global settings.
-pub(crate) fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBuilder<'a> {
+fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBuilder<'a> {
     let client_builder = BaseClientBuilder::new(
         globals.network_settings.connectivity,
         globals.network_settings.system_certs,
@@ -253,14 +275,14 @@ impl GlobalInitialization {
 }
 
 /// uv was installed through an external package manager and cannot update itself.
-#[cfg(not(feature = "self-update"))]
+#[cfg(all(feature = "self-commands", not(feature = "self-update")))]
 #[derive(Debug, thiserror::Error)]
 #[error("uv was installed through an external package manager and cannot update itself.")]
 struct ExternallyInstalledError {
     install_source: Option<InstallSource>,
 }
 
-#[cfg(not(feature = "self-update"))]
+#[cfg(all(feature = "self-commands", not(feature = "self-update")))]
 impl uv_errors::Hinted for ExternallyInstalledError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(source) = &self.install_source {
@@ -311,7 +333,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) = **command
     {
         Some(ParsedRunCommand::from_args(
-            command, module, script, gui_script,
+            command.as_slice(),
+            module,
+            script,
+            gui_script,
         )?)
     } else {
         None
@@ -533,11 +558,15 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         {
             if let Some(parsed_run_command) = parsed_run_command {
                 let (script, run_command) = parsed_run_command
-                    .resolve(
-                        &cli.top_level.global_args,
-                        filesystem.as_ref(),
-                        &environment,
-                    )
+                    .resolve(&|| {
+                        let settings = GlobalSettings::resolve(
+                            &cli.top_level.global_args,
+                            filesystem.as_ref(),
+                            &environment,
+                            None,
+                        )?;
+                        Ok(base_client_builder(&settings))
+                    })
                     .await?;
                 (script, Some(run_command))
             } else {
@@ -591,71 +620,30 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             | ProjectCommand::Export(uv_cli::ExportArgs {
                 script: Some(script),
                 ..
-            }) => match Pep723Script::read(script).await {
-                Ok(Some(script)) => Some(Pep723Item::Script(script)),
-                Ok(None) => {
-                    bail!(
-                        "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
-                        script.user_display().cyan(),
-                        format!("uv init --script {}", script.user_display()).green()
-                    )
-                }
-                Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                    bail!(
-                        "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
-                        script.user_display().cyan(),
-                        format!("uv init --script {}", script.user_display()).green()
-                    )
-                }
-                Err(err) => return Err(err.into()),
-            },
+            })
+            | ProjectCommand::Check(uv_cli::CheckArgs {
+                script: Some(script),
+                ..
+            }) => Some(read_pep723_script(script).await?),
             #[cfg(feature = "audit")]
             ProjectCommand::Audit(uv_cli::AuditArgs {
                 script: Some(script),
                 ..
-            }) => read_pep723_script(script).await.map(Some)?,
-            #[cfg(feature = "project")]
-            ProjectCommand::Check(uv_cli::CheckArgs {
-                script: Some(script),
-                ..
-            }) => match Pep723Script::read(script).await {
-                Ok(Some(script)) => Some(Pep723Item::Script(script)),
-                Ok(None) => {
-                    bail!(
-                        "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
-                        script.user_display().cyan(),
-                        format!("uv init --script {}", script.user_display()).green()
-                    )
-                }
-                Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                    bail!(
-                        "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
-                        script.user_display().cyan(),
-                        format!("uv init --script {}", script.user_display()).green()
-                    )
-                }
-                Err(err) => return Err(err.into()),
-            },
+            }) => Some(read_pep723_script(script).await?),
             _ => None,
         }
-    } else if let Some(script) = pep723_from_workspace_metadata(&cli.command).await? {
-        Some(script)
     } else {
-        pep723_from_python(&cli.command).await?
+        pep723_from_workspace_or_python(&cli.command).await?
     };
-    // With the project/run surfaces gated off, a PEP 723 script can still arrive via
-    // `uv workspace metadata --script` or `uv python <script>`; otherwise there's no script.
+    // With the project surfaces gated off, a PEP 723 script can still arrive via
+    // `uv workspace metadata --script` or `uv python find <script>`.
     #[cfg(not(any(
         feature = "project",
         feature = "run",
         feature = "init",
         feature = "audit"
     )))]
-    let script = if let Some(script) = pep723_from_workspace_metadata(&cli.command).await? {
-        Some(script)
-    } else {
-        pep723_from_python(&cli.command).await?
-    };
+    let script = pep723_from_workspace_or_python(&cli.command).await?;
 
     // If the target is a PEP 723 script, merge the metadata into the filesystem metadata.
     let script_filesystem = script
@@ -676,6 +664,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     let filesystem = script_filesystem.combine(filesystem);
 
     let custom_certificate_file = match &*cli.command {
+        #[cfg(feature = "pip")]
         Commands::Pip(PipNamespace { cert, .. }) => cert.as_deref(),
         _ => None,
     };
@@ -717,7 +706,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     }
 
     // Resolve the cache settings.
-    let cache_settings = CacheSettings::resolve(*cli.top_level.cache_args, filesystem.as_ref());
+    let cache_settings =
+        CacheSettings::resolve(*cli.top_level.cache_args, filesystem.as_ref(), &environment);
 
     if global_initialization.needs_initialization() {
         // Set and finalize the global preview configuration.
@@ -964,6 +954,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.dependency_mode,
                 args.settings.upgrade,
                 args.settings.generate_hashes,
+                args.build_hash_checking,
                 args.settings.no_emit_package,
                 args.settings.no_strip_extras,
                 args.settings.no_strip_markers,
@@ -1001,6 +992,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python,
                 args.settings.system,
                 globals.python_preference,
+                globals.python_arch,
                 globals.concurrency,
                 globals.quiet > 0,
                 cache,
@@ -1063,6 +1055,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.link_mode,
                 args.settings.compile_bytecode,
                 args.settings.hash_checking,
+                args.build_hash_checking,
                 args.settings.index_locations,
                 args.settings.index_strategy,
                 args.settings.torch_backend,
@@ -1092,6 +1085,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.prefix,
                 args.settings.sources,
                 globals.python_preference,
+                globals.python_arch,
                 globals.concurrency,
                 cache,
                 workspace_cache,
@@ -1170,7 +1164,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                             }) = &url.parsed_url
                             {
                                 debug!(
-                                    "Marking explicit source tree for reinstall: `{}`",
+                                    "Marking explicit source tree for reinstall: {}",
                                     install_path.display()
                                 );
                                 args.settings.reinstall = args
@@ -1185,7 +1179,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                             &requirement.url.parsed_url
                         {
                             debug!(
-                                "Marking explicit source tree for reinstall: `{}`",
+                                "Marking explicit source tree for reinstall: {}",
                                 install_path.display()
                             );
                             args.settings.reinstall =
@@ -1236,6 +1230,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.link_mode,
                 args.settings.compile_bytecode,
                 args.settings.hash_checking,
+                args.build_hash_checking,
                 globals.installer_metadata,
                 &args.settings.config_setting,
                 &args.settings.config_settings_package,
@@ -1257,6 +1252,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.target,
                 args.settings.prefix,
                 globals.python_preference,
+                globals.python_arch,
                 globals.concurrency,
                 cache,
                 workspace_cache,
@@ -1292,6 +1288,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     .collect::<Result<Vec<_>, _>>()?,
             );
             commands::pip_uninstall(
+                globals.python_arch,
                 &sources,
                 args.settings.python,
                 args.settings.system,
@@ -1319,6 +1316,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_freeze(
+                globals.python_arch,
                 args.exclude_editable,
                 &args.exclude,
                 args.settings.strict,
@@ -1347,6 +1345,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_list(
+                globals.python_arch,
                 args.editable,
                 &args.exclude,
                 &args.format,
@@ -1382,6 +1381,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_show(
+                globals.python_arch,
                 args.package,
                 args.settings.strict,
                 &args.settings.dependency_metadata,
@@ -1407,6 +1407,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_tree(
+                globals.python_arch,
                 args.show_version_specifiers,
                 args.depth,
                 &args.prune,
@@ -1443,6 +1444,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_check(
+                globals.python_arch,
                 args.settings.python.as_deref(),
                 args.settings.system,
                 args.settings.python_version.as_ref(),
@@ -1540,12 +1542,14 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &client_builder.subcommand(vec!["build".to_owned()]),
                 config_discovery,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 &cache,
                 &workspace_cache,
                 printer,
                 globals.preview,
+                commands::diagnostics::write_error_chain,
             )
             .await
         }
@@ -1610,6 +1614,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 python_request,
                 args.settings.install_mirrors,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 args.settings.link_mode,
                 &args.settings.index_locations,
@@ -1816,6 +1821,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 invocation_source,
                 args.isolated,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -1918,6 +1924,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings,
                 client_builder.subcommand(vec!["tool".to_owned(), "install".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -1957,7 +1964,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             )
             .await
         }
-        #[cfg(feature = "tool")]
+        #[cfg(all(feature = "tool", feature = "audit"))]
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Audit(args),
         }) => {
@@ -2005,6 +2012,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.filesystem,
                 client_builder.subcommand(vec!["tool".to_owned(), "upgrade".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -2012,6 +2020,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &workspace_cache,
                 printer,
                 globals.preview,
+                commands::diagnostics::write_error_chain,
             ))
             .await
         }
@@ -2062,10 +2071,9 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.all_arches,
                 args.show_urls,
                 args.output_format,
-                args.python_downloads_json_url,
-                args.python_install_mirror,
-                args.pypy_install_mirror,
+                args.install_mirrors,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 &client_builder.subcommand(vec!["python".to_owned(), "list".to_owned()]),
                 &cache,
@@ -2093,11 +2101,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.bin,
                 args.registry,
                 args.force,
-                args.python_install_mirror,
-                args.pypy_install_mirror,
-                args.python_downloads_json_url,
+                args.install_mirrors,
                 client_builder.subcommand(vec!["python".to_owned(), "install".to_owned()]),
                 args.default,
+                globals.python_arch,
                 globals.python_downloads,
                 config_discovery,
                 args.compile_bytecode,
@@ -2115,7 +2122,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::PythonUpgradeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
-            let upgrade = commands::PythonUpgrade::Enabled(commands::PythonUpgradeSource::Upgrade);
+            let upgrade = PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade);
 
             // Initialize the cache.
             let cache = cache.init().await?;
@@ -2129,11 +2136,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.bin,
                 args.registry,
                 args.force,
-                args.python_install_mirror,
-                args.pypy_install_mirror,
-                args.python_downloads_json_url,
+                args.install_mirrors,
                 client_builder.subcommand(vec!["python".to_owned(), "upgrade".to_owned()]),
                 args.default,
+                globals.python_arch,
                 globals.python_downloads,
                 config_discovery,
                 args.compile_bytecode,
@@ -2173,6 +2179,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     // TODO(zsol): is this the right thing to do here?
                     &client_builder.subcommand(vec!["python".to_owned(), "find".to_owned()]),
                     globals.python_preference,
+                    globals.python_arch,
                     globals.python_downloads,
                     config_discovery,
                     &cache,
@@ -2189,6 +2196,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     args.system,
                     config_discovery,
                     globals.python_preference,
+                    globals.python_arch,
                     args.python_downloads_json_url.as_deref(),
                     &client_builder.subcommand(vec!["python".to_owned(), "find".to_owned()]),
                     &cache,
@@ -2214,6 +2222,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.request,
                 args.resolved,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 args.no_project,
                 args.global,
@@ -2319,6 +2328,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
                 Box::pin(commands::metadata(
                     &project_dir,
+                    args.output_version,
                     args.lock_check,
                     args.frozen,
                     args.refresh,
@@ -2331,6 +2341,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     client_builder.subcommand(vec!["workspace".to_owned(), "metadata".to_owned()]),
                     script,
                     globals.python_preference,
+                    globals.python_arch,
                     globals.python_downloads,
                     globals.concurrency,
                     config_discovery,
@@ -2527,6 +2538,7 @@ async fn run_project(
                 args.no_workspace,
                 &client_builder.subcommand(vec!["init".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 config_discovery,
                 &cache,
@@ -2593,6 +2605,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["run".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -2601,6 +2614,7 @@ async fn run_project(
                 printer,
                 args.env_file,
                 globals.preview,
+                args.recursion_depth,
                 args.max_recursion_depth,
                 args.malware_settings,
                 #[cfg(unix)]
@@ -2650,6 +2664,7 @@ async fn run_project(
                 args.python_platform,
                 args.install_mirrors,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 args.settings,
                 client_builder.subcommand(vec!["sync".to_owned()]),
@@ -2709,6 +2724,7 @@ async fn run_project(
                 client_builder.subcommand(vec!["lock".to_owned()]),
                 script,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 config_discovery,
@@ -2719,6 +2735,7 @@ async fn run_project(
             ))
             .await
         }
+        #[cfg(feature = "project")]
         ProjectCommand::Upgrade(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::UpgradeSettings::resolve(args, filesystem, environment)?;
@@ -2738,6 +2755,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["upgrade".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 config_discovery,
@@ -2795,7 +2813,7 @@ async fn run_project(
                             }) = &url.parsed_url
                             {
                                 debug!(
-                                    "Marking explicit source tree for reinstall: `{}`",
+                                    "Marking explicit source tree for reinstall: {}",
                                     install_path.display()
                                 );
                                 args.settings.reinstall = args
@@ -2810,7 +2828,7 @@ async fn run_project(
                             &requirement.url.parsed_url
                         {
                             debug!(
-                                "Marking explicit source tree for reinstall: `{}`",
+                                "Marking explicit source tree for reinstall: {}",
                                 install_path.display()
                             );
                             args.settings.reinstall =
@@ -2873,6 +2891,7 @@ async fn run_project(
                 client_builder.subcommand(vec!["add".to_owned()]),
                 script,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -2924,6 +2943,7 @@ async fn run_project(
                 client_builder.subcommand(vec!["remove".to_owned()]),
                 script,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -2976,6 +2996,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["version".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -3026,6 +3047,7 @@ async fn run_project(
                 &client_builder.subcommand(vec!["tree".to_owned()]),
                 script,
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 config_discovery,
@@ -3077,6 +3099,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["export".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 config_discovery,
@@ -3161,6 +3184,7 @@ async fn run_project(
                 script,
                 client_builder.subcommand(vec!["check".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.installer_metadata,
                 globals.concurrency,
@@ -3203,6 +3227,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["audit".to_owned()]),
                 globals.python_preference,
+                globals.python_arch,
                 globals.python_downloads,
                 globals.concurrency,
                 config_discovery,
@@ -3325,8 +3350,9 @@ where
     );
 
     // Process-global state (flags, preview configuration, the open-file limit and the tracing
-    // subscriber) can only be initialized once, and upstream errors on a second attempt. An embedding host can call this entry point more than once per process, so
-    // initialize on the first call and reuse that state afterwards.
+    // subscriber) can only be initialized once, and upstream errors on a second attempt. An
+    // embedding host can call this entry point more than once per process, so initialize on the
+    // first call and reuse that state afterwards.
     static INITIALIZED: AtomicBool = AtomicBool::new(false);
     let global_initialization = if INITIALIZED.swap(true, Ordering::SeqCst) {
         GlobalInitialization::Reuse
@@ -3366,20 +3392,6 @@ where
             let error = match err.downcast::<UvError>() {
                 Ok(error) => error,
                 Err(err) if err.is::<ArgumentError>() => UvError::argument(err),
-                #[cfg(any(
-                    feature = "project",
-                    feature = "run",
-                    feature = "init",
-                    feature = "audit"
-                ))]
-                Err(err)
-                    if matches!(
-                        err.downcast_ref::<ProjectError>(),
-                        Some(ProjectError::LockFormat(..))
-                    ) =>
-                {
-                    UvError::User(err)
-                }
                 Err(err) => UvError::unexpected(err),
             };
             match error {

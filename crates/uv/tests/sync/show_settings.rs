@@ -2,7 +2,7 @@ use std::process::Command;
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use url::Url;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::{TestContext, capture_uv_snapshot, diff_uv_snapshot, uv_snapshot};
@@ -70,6 +70,7 @@ fn show_settings_returns_before_running_commands() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -127,6 +128,8 @@ fn show_settings_returns_before_running_commands() {
     +    install_mirrors: PythonInstallMirrors {
     +        python_install_mirror: None,
     +        pypy_install_mirror: None,
+    +        graalpy_install_mirror: None,
+    +        pyodide_install_mirror: None,
     +        python_downloads_json_url: None,
     +    },
     +}
@@ -204,6 +207,7 @@ fn pip_compile_baseline() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -225,6 +229,7 @@ fn pip_compile_baseline() {
         overrides: [],
         excludes: [],
         build_constraints: [],
+        build_hash_checking: Verify,
         constraints_from_workspace: [],
         overrides_from_workspace: [],
         excludes_from_workspace: [],
@@ -254,6 +259,8 @@ fn pip_compile_baseline() {
             install_mirrors: PythonInstallMirrors {
                 python_install_mirror: None,
                 pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
                 python_downloads_json_url: None,
             },
             system: false,
@@ -377,7 +384,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         url = "https://index-user:index-secret@test.pypi.org/simple/"
     "#})?;
 
-    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+    let configured = capture_uv_snapshot!(context.filters(), add_shared_args(context.publish())
         .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_TOKEN, "publish-secret-token"), @r#"
     exit_code: 0 (success)
@@ -412,6 +419,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -435,7 +443,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         index: None,
         dry_run: false,
         no_attestations: false,
-        publish_url: DisplaySafeUrl {
+        publish_url: SafeUrl {
             scheme: "https",
             cannot_be_a_base: false,
             username: "",
@@ -455,7 +463,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         check_url: Some(
             Url(
                 VerbatimUrl {
-                    url: DisplaySafeUrl {
+                    url: SafeUrl {
                         scheme: "https",
                         cannot_be_a_base: false,
                         username: "check-user",
@@ -490,7 +498,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
                     ),
                     url: Url(
                         VerbatimUrl {
-                            url: DisplaySafeUrl {
+                            url: SafeUrl {
                                 scheme: "https",
                                 cannot_be_a_base: false,
                                 username: "index-user",
@@ -533,6 +541,23 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         },
     }
     "#);
+
+    diff_uv_snapshot!(context.filters(), &configured, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .arg("--trusted-publishing")
+        .arg("always")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "publish-secret-token"), @"
+    ...
+             query: None,
+             fragment: None,
+         },
+    -    trusted_publishing: Never,
+    +    trusted_publishing: Always,
+         keyring_provider: Subprocess,
+         check_url: Some(
+             Url(
+    ...
+    ");
 
     Ok(())
 }
@@ -581,6 +606,7 @@ fn pip_install_baseline() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -604,6 +630,7 @@ fn pip_install_baseline() {
         overrides: [],
         excludes: [],
         build_constraints: [],
+        build_hash_checking: Verify,
         dry_run: Disabled,
         output_format: Text,
         constraints_from_workspace: [],
@@ -629,6 +656,8 @@ fn pip_install_baseline() {
             install_mirrors: PythonInstallMirrors {
                 python_install_mirror: None,
                 pypy_install_mirror: None,
+                graalpy_install_mirror: None,
+                pyodide_install_mirror: None,
                 python_downloads_json_url: None,
             },
             system: false,
@@ -772,6 +801,7 @@ fn lock_baseline() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -791,6 +821,8 @@ fn lock_baseline() {
         install_mirrors: PythonInstallMirrors {
             python_install_mirror: None,
             pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
             python_downloads_json_url: None,
         },
         refresh: None(
@@ -830,6 +862,7 @@ fn lock_baseline() {
             index_strategy: FirstIndex,
             keyring_provider: Disabled,
             link_mode: Clone,
+            build_hash_checking: Verify,
             build_isolation: Isolate,
             extra_build_dependencies: ExtraBuildDependencies(
                 {},
@@ -899,6 +932,7 @@ fn version_baseline() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -924,6 +958,8 @@ fn version_baseline() {
         install_mirrors: PythonInstallMirrors {
             python_install_mirror: None,
             pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
             python_downloads_json_url: None,
         },
         refresh: None(
@@ -964,6 +1000,7 @@ fn version_baseline() {
                 index_strategy: FirstIndex,
                 keyring_provider: Disabled,
                 link_mode: Clone,
+                build_hash_checking: Verify,
                 build_isolation: Isolate,
                 extra_build_dependencies: ExtraBuildDependencies(
                     {},
@@ -1041,6 +1078,7 @@ fn tool_install_baseline() {
             flags: [],
         },
         python_preference: Managed,
+        python_arch: None,
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -1090,6 +1128,7 @@ fn tool_install_baseline() {
             dependency_metadata: None,
             config_settings: None,
             config_settings_package: None,
+            require_build_hashes: None,
             build_isolation: None,
             extra_build_dependencies: None,
             extra_build_variables: None,
@@ -1139,6 +1178,7 @@ fn tool_install_baseline() {
                 index_strategy: FirstIndex,
                 keyring_provider: Disabled,
                 link_mode: Clone,
+                build_hash_checking: Verify,
                 build_isolation: Isolate,
                 extra_build_dependencies: ExtraBuildDependencies(
                     {},
@@ -1170,6 +1210,8 @@ fn tool_install_baseline() {
         install_mirrors: PythonInstallMirrors {
             python_install_mirror: None,
             pypy_install_mirror: None,
+            graalpy_install_mirror: None,
+            pyodide_install_mirror: None,
             python_downloads_json_url: None,
         },
     }
@@ -1218,7 +1260,7 @@ fn resolve_uv_toml() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1373,7 +1415,7 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1533,7 +1575,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1570,7 +1612,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1625,7 +1667,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
                          name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1664,7 +1706,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
     +                    name: None,
                          url: Pypi(
                              VerbatimUrl {
-                                 url: DisplaySafeUrl {
+                                 url: SafeUrl {
     ...
     "#
     );
@@ -1717,7 +1759,7 @@ fn resolve_find_links() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1840,7 +1882,7 @@ fn resolve_top_level() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -1877,7 +1919,7 @@ fn resolve_top_level() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -2289,7 +2331,7 @@ fn resolve_both() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -2424,7 +2466,7 @@ fn resolve_both_special_fields() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -2535,7 +2577,7 @@ fn resolve_both_preview() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
              malware_check_url: None,
          },
@@ -2572,7 +2614,7 @@ fn resolve_both_preview() -> anyhow::Result<()> {
     +        flags: [],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
 
      ----- stderr -----
@@ -2609,7 +2651,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.lock()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 7, column 13
                |
              7 | conflicts = [
@@ -2633,7 +2675,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.lock()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 7, column 13
                |
              7 | conflicts = [[]]
@@ -2659,7 +2701,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.lock()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 7, column 13
                |
              7 | conflicts = [
@@ -2771,7 +2813,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Pypi(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -2850,12 +2892,12 @@ fn resolve_config_file() -> anyhow::Result<()> {
         .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `[CACHE_DIR]/uv.toml`
+    error: Failed to parse: [CACHE_DIR]/uv.toml
       cause: TOML parse error at line 1, column 2
                |
              1 | [project]
                |  ^^^^^^^
-             unknown field `project`, expected one of `required-version`, `system-certs`, `native-tls`, `offline`, `no-cache`, `cache-dir`, `preview`, `preview-features`, `python-preference`, `python-downloads`, `concurrent-downloads`, `concurrent-builds`, `concurrent-installs`, `index`, `index-url`, `extra-index-url`, `no-index`, `find-links`, `index-strategy`, `keyring-provider`, `http-proxy`, `https-proxy`, `no-proxy`, `allow-insecure-host`, `resolution`, `prerelease`, `prerelease-package`, `fork-strategy`, `dependency-metadata`, `config-settings`, `config-settings-package`, `no-build-isolation`, `no-build-isolation-package`, `extra-build-dependencies`, `extra-build-variables`, `exclude-newer`, `exclude-newer-package`, `link-mode`, `compile-bytecode`, `no-sources`, `no-sources-package`, `upgrade`, `upgrade-package`, `reinstall`, `reinstall-package`, `no-build`, `no-build-package`, `no-binary`, `no-binary-package`, `torch-backend`, `python-install-mirror`, `pypy-install-mirror`, `python-downloads-json-url`, `publish-url`, `trusted-publishing`, `check-url`, `add-bounds`, `audit`, `pip`, `cache-keys`, `override-dependencies`, `exclude-dependencies`, `constraint-dependencies`, `build-constraint-dependencies`, `environments`, `required-environments`, `minimum-libc-version`, `conflicts`, `workspace`, `sources`, `managed`, `package`, `default-groups`, `dependency-groups`, `dev-dependencies`, `build-backend`
+             unknown field `project`, expected one of `required-version`, `system-certs`, `native-tls`, `offline`, `no-cache`, `cache-dir`, `preview`, `preview-features`, `python-preference`, `python-downloads`, `concurrent-downloads`, `concurrent-builds`, `concurrent-installs`, `index`, `index-url`, `extra-index-url`, `no-index`, `find-links`, `index-strategy`, `keyring-provider`, `http-proxy`, `https-proxy`, `no-proxy`, `allow-insecure-host`, `resolution`, `prerelease`, `prerelease-package`, `fork-strategy`, `dependency-metadata`, `config-settings`, `config-settings-package`, `no-build-isolation`, `require-build-hashes`, `no-build-isolation-package`, `extra-build-dependencies`, `extra-build-variables`, `exclude-newer`, `exclude-newer-package`, `link-mode`, `compile-bytecode`, `no-sources`, `no-sources-package`, `upgrade`, `upgrade-package`, `reinstall`, `reinstall-package`, `no-build`, `no-build-package`, `no-binary`, `no-binary-package`, `torch-backend`, `python-install-mirror`, `pypy-install-mirror`, `graalpy-install-mirror`, `pyodide-install-mirror`, `python-downloads-json-url`, `publish-url`, `trusted-publishing`, `check-url`, `add-bounds`, `audit`, `pip`, `cache-keys`, `override-dependencies`, `exclude-dependencies`, `constraint-dependencies`, `build-constraint-dependencies`, `environments`, `required-environments`, `minimum-libc-version`, `conflicts`, `workspace`, `sources`, `managed`, `package`, `default-groups`, `dependency-groups`, `dev-dependencies`, `build-backend`
     "
     );
 
@@ -2882,7 +2924,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     warning: The `--config-file` argument expects to receive a `uv.toml` file, not a `pyproject.toml`. If you're trying to run a command from another project, use the `--project` argument instead.
-    error: Failed to parse: `[CACHE_DIR]/pyproject.toml`
+    error: Failed to parse: [CACHE_DIR]/pyproject.toml
       cause: TOML parse error at line 9, column 3
                |
              9 | ""
@@ -3023,6 +3065,44 @@ fn allow_insecure_host() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn allow_insecure_host_invalid_fields() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let config = context.temp_dir.child("uv.toml");
+
+    config.write_str(r#"allow-insecure-host = [{ scheme = "https" }]"#)?;
+    uv_snapshot!(context.filters(),
+        add_shared_args(context.version()).arg("--show-settings"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse: uv.toml
+      cause: TOML parse error at line 1, column 24
+               |
+             1 | allow-insecure-host = [{ scheme = "https" }]
+               |                        ^^^^^^^^^^^^^^^^^^^^
+             missing field `host`
+    "#);
+
+    config.write_str(r#"allow-insecure-host = [{ host = "example.com", port = "bad" }]"#)?;
+    uv_snapshot!(context.filters(),
+        add_shared_args(context.version()).arg("--show-settings"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse: uv.toml
+      cause: TOML parse error at line 1, column 55
+               |
+             1 | allow-insecure-host = [{ host = "example.com", port = "bad" }]
+               |                                                       ^^^^^
+             invalid type: string "bad", expected u16
+    "#);
+
+    Ok(())
+}
+
 /// Resolve relative CLI indexes and find-links against the directory selected by `--directory`.
 #[test]
 #[cfg_attr(
@@ -3045,7 +3125,8 @@ fn resolve_relative_indexes_with_directory() -> anyhow::Result<()> {
 
     let absolute_index = context.temp_dir.child("absolute-index");
     let absolute_find_links = context.temp_dir.child("absolute-find-links");
-    let file_url = Url::from_directory_path(context.temp_dir.child("file-index").path()).unwrap();
+    let file_url =
+        SafeUrl::from_directory_path(context.temp_dir.child("file-index").path()).unwrap();
 
     let show_settings = || {
         let mut command = add_shared_args(context.pip_install());
@@ -3217,7 +3298,7 @@ fn index_priority() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -3256,7 +3337,7 @@ fn index_priority() -> anyhow::Result<()> {
     +                    name: None,
     +                    url: Url(
     +                        VerbatimUrl {
-    +                            url: DisplaySafeUrl {
+    +                            url: SafeUrl {
     +                                scheme: "https",
     +                                cannot_be_a_base: false,
     +                                username: "",
@@ -3735,7 +3816,7 @@ fn index_by_name_with_directory() -> anyhow::Result<()> {
     };
 
     let configured_index = configuration_directory.child("configured-index");
-    let configured_index = Url::from_file_path(configured_index.path()).map_err(|()| {
+    let configured_index = SafeUrl::from_file_path(configured_index.path()).map_err(|()| {
         anyhow::anyhow!("Failed to convert the configured index path to a file URL")
     })?;
     let configured_index = format!("internal={configured_index}");
@@ -3827,20 +3908,7 @@ fn verify_hashes() -> anyhow::Result<()> {
             .arg("-r")
             .arg("requirements.in")
             .arg("--no-require-hashes")
-            .arg("--show-settings"), @"
-    ...
-             link_mode: Clone,
-             compile_bytecode: false,
-             sources: None,
-    -        hash_checking: Some(
-    -            Verify,
-    -        ),
-    +        hash_checking: None,
-             upgrade: Upgrade {
-                 strategy: None,
-                 constraints: {},
-    ...
-    "
+            .arg("--show-settings"), @""
     );
 
     // Compare against output of the same command without `UV_NO_VERIFY_HASHES=1`.
@@ -3876,6 +3944,18 @@ fn verify_hashes() -> anyhow::Result<()> {
             .arg("--show-settings"),
         @""
     );
+
+    // Explicitly configuring the default must also retain verification.
+    context.temp_dir.child("uv.toml").write_str(
+        r"
+        [pip]
+        require-hashes = false
+        ",
+    )?;
+    diff_uv_snapshot!(context.filters(), &default, add_shared_args(context.pip_install())
+        .arg("-r")
+        .arg("requirements.in")
+        .arg("--show-settings"), @"");
 
     Ok(())
 }
@@ -3938,25 +4018,26 @@ fn preview_features() {
     +            CentralizedProjectEnvs,
     +            ToolInstallLocks,
     +            WorkspaceListScripts,
-    +            NoDistutilsPatch,
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,
     +            LockfileNormalization,
     +            LockWithoutMetadata,
-    +            TarCodec,
     +            IndexByName,
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,
     +            MissingExcludeNewerPackageLock,
     +            ResolutionInputs,
     +            BatchExport,
+    +            FrozenLockfile,
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
     +            BuildLazyImports,
+    +            BuildDependencyHashes,
+    +            WheelVariants,
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -3984,7 +4065,7 @@ fn preview_features() {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -4156,7 +4237,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -4232,7 +4313,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -4402,7 +4483,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -4449,7 +4530,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.version()).arg("--show-settings"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `uv.toml`
+    error: Failed to parse: uv.toml
       cause: cannot specify both `preview` and `preview-features`
     ");
 
@@ -4479,7 +4560,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.version()).arg("--show-settings"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `uv.toml`
+    error: Failed to parse: uv.toml
       cause: TOML parse error at line 1, column 20
                |
              1 | preview-features = ["  "]
@@ -4493,7 +4574,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), add_shared_args(context.version()).arg("--show-settings"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `uv.toml`
+    error: Failed to parse: uv.toml
       cause: TOML parse error at line 1, column 20
                |
              1 | preview-features = 123
@@ -4542,7 +4623,7 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Automatic,
+         python_arch: None,
     ...
     "
     );
@@ -4674,7 +4755,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     +        ],
          },
          python_preference: Managed,
-         python_downloads: Never,
+         python_arch: None,
     ...
     "
     );
@@ -4815,6 +4896,35 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
+fn offline_env_false_overrides_config() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version()).arg("--show-settings")
+    );
+
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str("offline = true\n")?;
+
+    assert_eq!(
+        baseline,
+        capture_uv_snapshot!(
+            context.filters(),
+            add_shared_args(context.version())
+                .arg("--show-settings")
+                .env(EnvVars::UV_OFFLINE, "0")
+        )
+    );
+
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
 fn system_certs_cli_aliases_override_env() {
     let context = uv_test::test_context!("3.12");
 
@@ -4909,6 +5019,29 @@ fn system_certs_config_aliases() -> anyhow::Result<()> {
     ...
     "
     );
+
+    assert_eq!(
+        baseline,
+        capture_uv_snapshot!(
+            context.filters(),
+            add_shared_args(context.version())
+                .arg("--show-settings")
+                .env(EnvVars::UV_SYSTEM_CERTS, "0")
+        )
+    );
+
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_NATIVE_TLS, "0"), @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+    ...
+    ");
 
     config.write_str(indoc::indoc! {r"
         system-certs = false
@@ -5388,6 +5521,61 @@ fn build_isolation_override() -> anyhow::Result<()> {
              ),
     ...
     "#);
+
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn no_cache_env_override() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("requirements.in").write_str("")?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-cache = true")?;
+
+    let configured = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.pip_compile())
+            .arg("--show-settings")
+            .arg("requirements.in")
+            .env_remove(EnvVars::UV_NO_CACHE)
+    );
+
+    diff_uv_snapshot!(context.filters(), &configured, add_shared_args(context.pip_compile())
+        .arg("--show-settings")
+        .arg("requirements.in")
+        .env(EnvVars::UV_NO_CACHE, "false"), @"
+    ...
+         installer_metadata: true,
+     }
+     CacheSettings {
+    -    no_cache: true,
+    +    no_cache: false,
+         cache_dir: Some(
+             \"[CACHE_DIR]/\",
+         ),
+    ...
+    ");
+
+    diff_uv_snapshot!(context.filters(), &configured, add_shared_args(context.pip_compile())
+        .arg("--show-settings")
+        .arg("requirements.in")
+        .arg("--no-cache")
+        .env(EnvVars::UV_NO_CACHE, "false"), @"");
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-cache = false")?;
+    diff_uv_snapshot!(context.filters(), &configured, add_shared_args(context.pip_compile())
+        .arg("--show-settings")
+        .arg("requirements.in")
+        .env(EnvVars::UV_NO_CACHE, "true"), @"");
 
     Ok(())
 }

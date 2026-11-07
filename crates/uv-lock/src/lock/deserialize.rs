@@ -342,9 +342,11 @@ enum MapKind {
     Manifest,
     ManifestDependencyGroups,
     ManifestDependencyMetadata,
+    ManifestGroupRequiresPython,
     Package,
     PackageOptionalDependencies,
     PackageDevDependencies,
+    PackageGroupRequiresPython,
     PackageMetadata,
     PackageMetadataRequiresDev,
 }
@@ -468,7 +470,9 @@ impl<'de> DocumentMapAccess<'_, 'de> {
             }
             (
                 MapKind::Root,
-                "[manifest.dependency-groups]" | "[[manifest.dependency-metadata]]",
+                "[manifest.dependency-groups]"
+                | "[[manifest.dependency-metadata]]"
+                | "[manifest.group-requires-python]",
             ) => {
                 // The manifest map consumes the first subtable when its parent is implicit.
                 self.track_key("manifest")?;
@@ -492,6 +496,11 @@ impl<'de> DocumentMapAccess<'_, 'de> {
                 Pending::Map(MapKind::ManifestDependencyGroups),
                 "[manifest.dependency-groups]",
             )),
+            (MapKind::Manifest, "[manifest.group-requires-python]") => Some((
+                "group-requires-python",
+                Pending::Map(MapKind::ManifestGroupRequiresPython),
+                "[manifest.group-requires-python]",
+            )),
             (MapKind::Manifest, "[[manifest.dependency-metadata]]") => Some((
                 "dependency-metadata",
                 Pending::Sequence(SequenceKind::ManifestDependencyMetadata),
@@ -501,6 +510,11 @@ impl<'de> DocumentMapAccess<'_, 'de> {
                 "optional-dependencies",
                 Pending::Map(MapKind::PackageOptionalDependencies),
                 "[package.optional-dependencies]",
+            )),
+            (MapKind::Package, "[package.group-requires-python]") => Some((
+                "group-requires-python",
+                Pending::Map(MapKind::PackageGroupRequiresPython),
+                "[package.group-requires-python]",
             )),
             (MapKind::Package, "[package.dev-dependencies]") => Some((
                 "dev-dependencies",
@@ -883,6 +897,7 @@ mod tests {
     use std::assert_matches;
     use std::fmt::Write as _;
 
+    use indoc::{formatdoc, indoc};
     use serde::Deserialize;
 
     use super::super::{LockParseError, VERSION};
@@ -994,8 +1009,12 @@ name = "dependency"
 version = "1.0.0"
 "#,
         ] {
-            let input =
-                format!("version = 1\nrevision = 3\nrequires-python = \">=3.12\"\n\n{subtable}");
+            let input = String::from(indoc! {r#"
+                version = 1
+                revision = 3
+                requires-python = ">=3.12"
+
+            "#}) + subtable;
             let expected: Lock =
                 toml::from_str(&input).expect("valid TOML lock with an implicit manifest");
             let actual = from_str(&input).expect("implicit manifest uses the direct parser");
@@ -1045,7 +1064,13 @@ version = "1.0.0"
     fn noncanonical_lock_falls_back() {
         let input = CANONICAL_LOCK
             .replace("requires-python = \">=3.12\"", "requires-python = '>=3.12'")
-            .replace("[[package]]", "# A hand-edited package.\n[[package]]");
+            .replace(
+                "[[package]]\n",
+                indoc! {"
+                    # A hand-edited package.
+                    [[package]]
+                "},
+            );
         let expected: Lock = toml::from_str(&input).expect("valid noncanonical lock");
 
         assert!(
@@ -1126,8 +1151,13 @@ version = "1.0.0"
     fn inline_unit_variants_without_values_preserve_toml_error() {
         for variant in ["highest", "lowest", "lowest-direct"] {
             let input = CANONICAL_LOCK.replacen(
-                "\n\n[[package]]",
-                &format!("\n\n[options]\nresolution-mode = {{ {variant} = }}\n\n[[package]]"),
+                "[[package]]\n",
+                &formatdoc! {"
+                    [options]
+                    resolution-mode = {{ {variant} = }}
+
+                    [[package]]
+                "},
                 1,
             );
             let expected = toml::from_str::<Lock>(&input)
@@ -1173,8 +1203,11 @@ version = "1.0.0"
             "-01", "00.1", "1.", "1.e2", "1e", "1e+", "1__0", "1_", "0_1",
         ] {
             let input = CANONICAL_LOCK.replace(
-                "requires-python = \">=3.12\"",
-                &format!("requires-python = \">=3.12\"\nunknown-number = {number}"),
+                "requires-python = \">=3.12\"\n",
+                &formatdoc! {r#"
+                    requires-python = ">=3.12"
+                    unknown-number = {number}
+                "#},
             );
             let expected = toml::from_str::<Lock>(&input)
                 .expect_err("TOML rejects invalid decimal number syntax");
@@ -1267,14 +1300,13 @@ version = "1.0.0"
     fn canonical_relative_exclude_newer_uses_fast_path() {
         let input = CANONICAL_LOCK.replace(
             "requires-python = \">=3.12\"\n",
-            concat!(
-                "requires-python = \">=3.12\"\n\n",
-                "[options]\n",
-                "exclude-newer = \"0001-01-01T00:00:00Z\" ",
-                "# This has no effect and is included for backwards compatibility ",
-                "when using relative exclude-newer values.\n",
-                "exclude-newer-span = \"P3W\"\n",
-            ),
+            indoc! {r#"
+                requires-python = ">=3.12"
+
+                [options]
+                exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+                exclude-newer-span = "P3W"
+            "#},
         );
         let expected: Lock =
             toml::from_str(&input).expect("canonical relative exclude-newer lock is valid TOML");
@@ -1401,25 +1433,42 @@ version = "1.0.0"
                 "unknown root keys",
                 CANONICAL_LOCK.replace(
                     "requires-python = \">=3.12\"\n",
-                    "requires-python = \">=3.12\"\nunknown = 1\nunknown = 2\n",
+                    indoc! {r#"
+                        requires-python = ">=3.12"
+                        unknown = 1
+                        unknown = 2
+                    "#},
                 ),
             ),
             (
                 "unknown inline-table keys",
                 CANONICAL_LOCK.replace(
                     "requires-python = \">=3.12\"\n",
-                    "requires-python = \">=3.12\"\nunknown = { nested = 1, nested = 2 }\n",
+                    indoc! {r#"
+                        requires-python = ">=3.12"
+                        unknown = { nested = 1, nested = 2 }
+                    "#},
                 ),
             ),
             (
                 "dependency-group keys",
-                format!("{CANONICAL_LOCK}\n[package.dev-dependencies]\ndev = []\ndev = []\n"),
+                formatdoc! {"
+                    {CANONICAL_LOCK}
+                    [package.dev-dependencies]
+                    dev = []
+                    dev = []
+                "},
             ),
             (
                 "section headers",
-                format!(
-                    "{CANONICAL_LOCK}\n[package.metadata]\nunknown = 1\n\n[package.metadata]\nunknown = 2\n"
-                ),
+                formatdoc! {"
+                    {CANONICAL_LOCK}
+                    [package.metadata]
+                    unknown = 1
+
+                    [package.metadata]
+                    unknown = 2
+                "},
             ),
         ] {
             let expected = toml::from_str::<Lock>(&input).expect_err("TOML rejects duplicate keys");
@@ -1458,7 +1507,10 @@ version = "1.0.0"
         ] {
             let input = CANONICAL_LOCK.replace(
                 "requires-python = \">=3.12\"\n",
-                &format!("requires-python = \">=3.12\"\n{entries}"),
+                &formatdoc! {r#"
+                    requires-python = ">=3.12"
+                    {entries}"#
+                },
             );
             let expected: Lock = toml::from_str(&input).expect("wide lock is valid TOML");
             let actual = from_str(&input).expect("wide lock uses the direct parser");
@@ -1492,7 +1544,10 @@ version = "1.0.0"
         ] {
             let input = CANONICAL_LOCK.replace(
                 "requires-python = \">=3.12\"\n",
-                &format!("requires-python = \">=3.12\"\n{entries}"),
+                &formatdoc! {r#"
+                    requires-python = ">=3.12"
+                    {entries}"#
+                },
             );
             let expected = toml::from_str::<Lock>(&input)
                 .expect_err("TOML rejects duplicate keys in wide maps");
@@ -1554,7 +1609,10 @@ version = "1.0.0"
         ] {
             let input = CANONICAL_LOCK.replace(
                 "requires-python = \">=3.12\"\n",
-                &format!("requires-python = \">=3.12\"\nunknown = {nested}\n"),
+                &formatdoc! {r#"
+                    requires-python = ">=3.12"
+                    unknown = {nested}
+                "#},
             );
             let expected =
                 toml::from_str::<Lock>(&input).expect_err("TOML rejects excessive nesting");
@@ -1576,7 +1634,10 @@ version = "1.0.0"
         let nested = format!("{}0{}", "[".repeat(80), "]".repeat(80));
         let input = CANONICAL_LOCK.replace(
             "requires-python = \">=3.12\"\n",
-            &format!("requires-python = \">=3.12\"\nunknown = {nested}\n"),
+            &formatdoc! {r#"
+                requires-python = ">=3.12"
+                unknown = {nested}
+            "#},
         );
         let expected: Lock = toml::from_str(&input).expect("TOML supports 80 nested containers");
         let actual = from_str(&input).expect("the direct parser supports 80 nested containers");

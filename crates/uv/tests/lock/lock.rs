@@ -1,5 +1,4 @@
 #[cfg(feature = "test-universal")]
-use std::collections::BTreeMap;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -14,7 +13,6 @@ use insta::assert_snapshot;
 use serde_json::json;
 #[cfg(feature = "test-universal")]
 use sha2::{Digest, Sha256};
-use url::Url;
 #[cfg(feature = "test-universal")]
 use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
@@ -26,13 +24,16 @@ use wiremock::{
 #[cfg(feature = "test-universal")]
 use uv_fs::PythonExt;
 use uv_fs::{Simplified, create_symlink};
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+#[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
+use uv_test::LATEST_PYTHON_3_13;
 #[cfg(feature = "test-universal")]
 use uv_test::archive::{generate_source_archive, write_tar_gz};
 #[cfg(feature = "test-universal")]
 use uv_test::package_server::PackageServer;
 #[cfg(feature = "test-universal")]
-use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
+use uv_test::packse::{PackseServer, WheelBuilder};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
@@ -125,7 +126,6 @@ fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
         }
         package.remove("metadata");
     }
-    lock["revision"] = toml_edit::value(4);
     Ok(lock)
 }
 
@@ -211,7 +211,7 @@ fn lock_equivalent_requirements() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(locked, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -287,7 +287,7 @@ fn lock_equivalent_requirements() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -394,7 +394,7 @@ fn lock_equivalent_manifest_inputs() -> Result<()> {
     let locked = context.read("uv.lock");
     assert_snapshot!(locked, @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.12"
 
     [options]
@@ -510,23 +510,23 @@ fn lock_equivalent_manifest_inputs() -> Result<()> {
         "build-constraint-dependencies = [\"a>=1\", \"a>=2\", \"a<3\"]",
         "build-constraint-dependencies = [\"a>=2,<3\"]",
     ))?;
-    for preview in [false, true] {
-        let mut command = context.lock();
-        command.arg("--locked").arg("--offline");
-        if preview {
-            command.args(["--preview-features", "lockfile-normalization"]);
-        }
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), command, @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-            hint: To update the lockfile, run `uv lock`.
-            ");
-        }
-    }
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline")
+        .args(["--preview-features", "lockfile-normalization"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
     Ok(())
 }
 
@@ -581,7 +581,7 @@ fn lock_equivalent_pruned_inputs() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(locked, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -717,7 +717,7 @@ fn lock_wheel_registry() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -835,7 +835,7 @@ fn lock_sdist_registry() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -964,7 +964,7 @@ fn lock_sdist_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1042,7 +1042,7 @@ fn lock_sdist_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1097,7 +1097,7 @@ fn lock_sdist_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1151,7 +1151,7 @@ fn lock_sdist_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1210,7 +1210,7 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1292,7 +1292,7 @@ fn lock_sdist_git_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1350,7 +1350,7 @@ fn lock_sdist_git_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1402,7 +1402,7 @@ fn lock_sdist_git_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1453,7 +1453,7 @@ fn lock_sdist_git_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1515,7 +1515,7 @@ fn lock_sdist_git_short_rev() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1590,13 +1590,14 @@ fn lock_sdist_git_archive() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
 
         [tool.uv.sources]
         iniconfig = { git = "https://github.com/astral-sh/archive-in-git-test", path = "archives/iniconfig-2.0.0.tar.gz" }
         "#,
     )?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.sync(), @r###"
     exit_code: 0 (success)
@@ -1616,7 +1617,7 @@ fn lock_sdist_git_archive() -> Result<()> {
         assert_snapshot!(
             lock, @r###"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1732,13 +1733,14 @@ fn lock_wheel_git_archive() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
 
         [tool.uv.sources]
         iniconfig = { git = "https://github.com/astral-sh/archive-in-git-test", path = "archives/iniconfig-2.0.0-py3-none-any.whl" }
         "#,
     )?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock(), @r###"
     exit_code: 0 (success)
@@ -1754,7 +1756,7 @@ fn lock_wheel_git_archive() -> Result<()> {
         assert_snapshot!(
             lock, @r###"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -1890,7 +1892,7 @@ fn lock_wheel_url() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -2032,7 +2034,7 @@ fn lock_sdist_url() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -2095,15 +2097,9 @@ fn lock_sdist_url() -> Result<()> {
 /// Create a deterministic wheel whose module can be imported by a source build backend.
 #[cfg(feature = "test-universal")]
 fn locked_build_dependency_wheel(module: &str) -> Result<Vec<u8>> {
-    let (_, wheel) = generate_wheel_with_files(
-        &"review-dep".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("review_dep/payload.py", module)],
-    );
+    let (_, wheel) = WheelBuilder::new(&"review-dep".parse()?, &"1.0.0".parse()?)
+        .files(&[("review_dep/payload.py", module)])
+        .build();
     Ok(wheel)
 }
 
@@ -2114,7 +2110,8 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
+        .with_filtered_exe_suffix()
+        .with_filtered_http_retries();
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2196,10 +2193,11 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
         .await;
     Mock::given(method("GET"))
         .and(path(format!("{wheel_path}.metadata")))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string("Metadata-Version: 2.3\nName: review-dep\nVersion: 1.0.0\n"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
+            Metadata-Version: 2.3
+            Name: review-dep
+            Version: 1.0.0
+        "}))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -2529,11 +2527,382 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// Relocking retains a local wheel's hash for installation unless explicitly upgraded.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_wheel_path_relock_hash_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo-pkg".parse()?;
+    let version = "1.0.0".parse()?;
+    let [(filename, trusted), (_, replacement)] = ["original", "replacement"].map(|contents| {
+        WheelBuilder::new(&name, &version)
+            .files(&[("demo_pkg/data.txt", contents)])
+            .build()
+    });
+    let archive = context.temp_dir.child(&filename);
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
+    archive.write_binary(&trusted)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg"]
+
+        [tool.uv.sources]
+        demo-pkg = {{ path = "{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    archive.write_binary(&replacement)?;
+    pyproject.write_str(&context.read("pyproject.toml").replace(">=3.12", ">=3.12.1"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = locked.replace(">=3.12", ">=3.12.1");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to read `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0-py3-none-any.whl`
+      cause: Hash mismatch for `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0-py3-none-any.whl`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg`
+    ");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.sync().arg("--upgrade-package").arg("demo-pkg").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + demo-pkg==1.0.0 (from file://[TEMP_DIR]/demo_pkg-1.0.0-py3-none-any.whl)
+    ");
+    assert_eq!(
+        context.read("uv.lock"),
+        locked.replace(&trusted_digest, &replacement_digest)
+    );
+    Ok(())
+}
+
+/// Unrelated project changes retain direct archive hashes until an explicit upgrade releases them.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let filename = "demo_pkg-1.0.0.tar.gz";
+    let sentinel = context.temp_dir.child("backend-executed");
+    let name = "demo-pkg".parse()?;
+    let server = PackageServer::new(&name).await;
+    let archive_url = server.file_url(filename);
+    let version = "1.0.0".parse()?;
+    let trusted = generate_source_archive(&name, &version, "", None)?;
+    let replacement = generate_source_archive(&name, &version, "", Some(sentinel.path()))?;
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_digest, "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest, "[REPLACEMENT_HASH]"));
+    server.serve(filename, &trusted, None).await;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg @ {archive_url}"]
+
+        [dependency-groups]
+        dev = ["demo-pkg"]
+        empty = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    // The same bytes remain usable when a Python requirement change forces fresh resolution.
+    pyproject.write_str(&context.read("pyproject.toml").replace(">=3.12", ">=3.12.1"))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + demo-pkg==1.0.0 (from http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz)
+    ");
+    context.assert_installed("demo_pkg", "1.0.0");
+    assert_eq!(
+        context.read("uv.lock"),
+        locked.replace(">=3.12", ">=3.12.1")
+    );
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+
+    server.serve(filename, &replacement, None).await;
+
+    // Installing an already-present package must still validate the archive used for resolution.
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+      cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    assert!(
+        !sentinel.exists(),
+        "automatic relocking executed the replacement"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+
+    insta::allow_duplicates! {
+        for args in [
+            vec![],
+            vec!["--refresh"],
+            vec!["--upgrade-package", "project"],
+            vec!["--upgrade-group", "empty"],
+            vec!["--locked", "--upgrade-package", "demo-pkg"],
+            vec!["--locked", "--upgrade-group", "dev"],
+        ] {
+            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+              cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+
+                     Expected:
+                       sha256:[TRUSTED_HASH]
+
+                     Computed:
+                       sha256:[REPLACEMENT_HASH]
+            ");
+            assert!(!sentinel.exists(), "relocking executed the replacement");
+            assert_eq!(context.read("uv.lock"), locked);
+        }
+    }
+
+    // Each explicit upgrade mode releases the selected package's recorded hash.
+    insta::allow_duplicates! {
+        for args in [
+            vec!["--upgrade-package", "demo-pkg"],
+            vec!["--upgrade-group", "dev"],
+            vec!["--upgrade"],
+        ] {
+            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 2 packages in [TIME]
+            ");
+            assert!(sentinel.exists());
+            assert_ne!(context.read("uv.lock"), locked);
+            context.temp_dir.child("uv.lock").write_str(&locked)?;
+            fs_err::remove_file(&sentinel)?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }?;
+
+    // A new direct URL is a new identity and does not require an upgrade flag.
+    let replacement_server = PackageServer::new(&name).await;
+    replacement_server.serve(filename, &replacement, None).await;
+    pyproject.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(&archive_url, &replacement_server.file_url(filename)),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert!(sentinel.exists());
+    Ok(())
+}
+
+/// Automatic registry re-resolution verifies a known source archive before running its backend.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_sdist_registry_relock_hash_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let filename = "demo_pkg-1.0.0.tar.gz";
+    let sentinel = context.temp_dir.child("backend-executed");
+    let name = "demo-pkg".parse()?;
+    let server = PackageServer::new(&name).await;
+    let version = "1.0.0".parse()?;
+    let trusted = generate_source_archive(&name, &version, "", None)?;
+    let replacement = generate_source_archive(&name, &version, "", Some(sentinel.path()))?;
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let context = context
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
+    server
+        .serve(filename, &trusted, Some(&trusted_digest))
+        .await;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg==1.0.0"]
+
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, server.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+
+    pyproject.write_str(&context.read("pyproject.toml").replace(">=3.12", ">=3.12.1"))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + demo-pkg==1.0.0
+    ");
+    context.assert_installed("demo_pkg", "1.0.0");
+    assert_eq!(
+        context.read("uv.lock"),
+        locked.replace(">=3.12", ">=3.12.1")
+    );
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+
+    // Retain the index's old digest so candidate selection reaches archive verification.
+    server
+        .serve(filename, &replacement, Some(&trusted_digest))
+        .await;
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg==1.0.0`
+      cause: Hash mismatch for `demo-pkg==1.0.0`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
+    ");
+    assert!(
+        !sentinel.exists(),
+        "automatic relocking executed the replacement"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+
+    // Advertising the replacement's digest must not replace the lockfile's trust.
+    server
+        .serve(filename, &replacement, Some(&replacement_digest))
+        .await;
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("project").arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg==1.0.0`
+      cause: Hash mismatch for `demo-pkg==1.0.0`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
+    ");
+    assert!(
+        !sentinel.exists(),
+        "an unrelated upgrade executed the replacement"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+
+    uv_snapshot!(context.filters(), context.sync().arg("--upgrade-package").arg("demo-pkg").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 1 package in [TIME]
+    ");
+    assert!(sentinel.exists());
+    assert_ne!(context.read("uv.lock"), locked);
+    // A local version inherits the public version's trust policy until explicitly upgraded.
+    let locked = context.read("uv.lock");
+    fs_err::remove_file(&sentinel)?;
+    let local = generate_source_archive(&name, &"1.0.0+local".parse()?, "", Some(sentinel.path()))?;
+    let local_digest = hex::encode(Sha256::digest(&local));
+    let context = context.with_filter((local_digest.clone(), "[LOCAL_HASH]"));
+    server
+        .serve("demo_pkg-1.0.0+local.tar.gz", &local, Some(&local_digest))
+        .await;
+    pyproject.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("demo-pkg==1.0.0", "demo-pkg==1.0.0+local"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg==1.0.0+local`
+      cause: Hash mismatch for `demo-pkg==1.0.0+local`
+
+             Expected:
+               sha256:[REPLACEMENT_HASH]
+
+             Computed:
+               sha256:[LOCAL_HASH]
+
+    hint: `demo-pkg` (v1.0.0+local) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0+local`
+    ");
+    assert!(
+        !sentinel.exists(),
+        "the local version's backend was executed"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("demo-pkg").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated demo-pkg v1.0.0 -> v1.0.0+local
+    ");
+    assert!(sentinel.exists());
+    Ok(())
+}
+
 /// Validate a locked source archive before invoking its potentially untrusted build backend.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
 
@@ -2573,7 +2942,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -2704,7 +3073,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -2732,11 +3101,11 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
     Ok(())
 }
 
-/// A changed index hash must not replace the trusted lockfile hash.
+/// Refreshing or switching registries preserves a locked version's hashes until an explicit upgrade.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
-async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+async fn lock_sdist_registry_hash_changes_require_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -2800,6 +3169,43 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
     );
     assert_eq!(context.read("uv.lock"), locked);
 
+    // Switching registries without changing the archive URL also requires an explicit upgrade.
+    let replacement_server = PackageServer::new(&name).await;
+    replacement_server
+        .serve_with(
+            filename,
+            &replacement_archive,
+            Some(&replacement_digest),
+            json!({ "url": server.file_url(filename) }),
+        )
+        .await;
+    pyproject_toml.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(&server.index_url(), &replacement_server.index_url()),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg==1.0.0`
+      cause: Hash mismatch for `demo-pkg==1.0.0`
+
+             Expected:
+               sha256:[TRUSTED_HASH]
+
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
+    ");
+    assert!(!sentinel.exists(), "the new index's backend was executed");
+    assert_eq!(context.read("uv.lock"), locked);
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("demo-pkg").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert!(sentinel.exists());
     Ok(())
 }
 
@@ -2807,7 +3213,7 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -2876,7 +3282,7 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -2938,7 +3344,7 @@ async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3018,7 +3424,9 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
     ----- stderr -----
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
       cause: Failed to extract archive: demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz
-      cause: I/O operation failed during extraction
+      cause: Invalid tar file
+      cause: at byte 0: failed to read tar data
+      cause: failed to read tar data
       cause: Invalid gzip header
     ");
     assert!(
@@ -3047,7 +3455,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_source_archive_url_equivalent_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3267,7 +3675,8 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
 async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
+        .with_filtered_sizes_and_units()
+        .with_filtered_http_retries();
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -3373,7 +3782,7 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -3496,7 +3905,7 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -3622,7 +4031,7 @@ fn lock_project_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -3809,7 +4218,7 @@ fn lock_project_with_scoped_overrides() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -4280,14 +4689,14 @@ fn lock_project_with_excludes() -> Result<()> {
     ");
 
     // Check the lockfile contains the excludes.
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock"))?;
+    let lock = context.read("uv.lock");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -4670,7 +5079,7 @@ fn lock_dependency_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -4852,7 +5261,7 @@ fn lock_conditional_dependency_extra() -> Result<()> {
     Resolved 8 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -4860,7 +5269,7 @@ fn lock_conditional_dependency_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7"
         resolution-markers = [
             "python_full_version >= '3.10'",
@@ -5149,7 +5558,7 @@ fn lock_dependency_non_existent_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -5371,7 +5780,7 @@ fn lock_conflicting_project_basic1() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "project", group = "foo" },
@@ -5533,13 +5942,11 @@ fn lock_conflicting_workspace_members() -> Result<()> {
         ]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.setuptools.packages.find]
-        include = ["example"]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    context.temp_dir.child("src/example/__init__.py").touch()?;
 
     // Create the subproject
     let subproject_dir = context.temp_dir.child("subexample");
@@ -5555,10 +5962,11 @@ fn lock_conflicting_workspace_members() -> Result<()> {
         dependencies = ["sortedcontainers==2.4.0"]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    subproject_dir.child("src/subexample/__init__.py").touch()?;
 
     // Lock should succeed because we declared the conflict
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -5576,7 +5984,7 @@ fn lock_conflicting_workspace_members() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "example" },
@@ -5784,13 +6192,11 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
         subexample = { workspace = true }
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.setuptools.packages.find]
-        include = ["example"]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    context.temp_dir.child("src/example/__init__.py").touch()?;
 
     // Create the subproject
     let subproject_dir = context.temp_dir.child("subexample");
@@ -5806,10 +6212,11 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
         dependencies = ["sortedcontainers==2.4.0"]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    subproject_dir.child("src/subexample/__init__.py").touch()?;
 
     // This should succeed, because the conflict is optional
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -5827,7 +6234,7 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "example", extra = "foo" },
@@ -6076,13 +6483,11 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
         indirection = { workspace = true }
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.setuptools.packages.find]
-        include = ["example"]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    context.temp_dir.child("src/example/__init__.py").touch()?;
 
     // Create the indirection subproject
     let subproject_dir = context.temp_dir.child("indirection");
@@ -6104,10 +6509,13 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
         subexample = { workspace = true }
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    subproject_dir
+        .child("src/indirection/__init__.py")
+        .touch()?;
 
     // Create the incompatible subproject
     let subproject_dir = context.temp_dir.child("subexample");
@@ -6123,10 +6531,11 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
         dependencies = ["sortedcontainers==2.4.0"]
 
         [build-system]
-        requires = ["setuptools>=42"]
-        build-backend = "setuptools.build_meta"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    subproject_dir.child("src/subexample/__init__.py").touch()?;
 
     // This succeeds, but should fail. We have an unconditional conflict via `example ->
     // indirection[foo] -> subexample`, so `example` is unusable.
@@ -6145,7 +6554,7 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "example" },
@@ -6328,7 +6737,7 @@ fn lock_conflicting_project_basic2() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "example", group = "foo" },
@@ -6529,7 +6938,7 @@ fn lock_conflicting_mixed() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "project", extra = "project2" },
@@ -6679,7 +7088,7 @@ fn lock_upgrade_log() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -6755,7 +7164,7 @@ fn lock_upgrade_log() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -6841,7 +7250,7 @@ fn lock_upgrade_log_multi_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -6921,7 +7330,7 @@ fn lock_upgrade_log_multi_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7075,7 +7484,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "package-a", extra = "non-prod" },
@@ -7218,7 +7627,7 @@ fn lock_preference() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7275,7 +7684,7 @@ fn lock_preference() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7319,7 +7728,7 @@ fn lock_preference() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7385,7 +7794,7 @@ fn lock_git_plus_prefix() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7462,7 +7871,7 @@ fn lock_partial_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10"
         resolution-markers = [
             "python_full_version >= '3.12'",
@@ -7738,7 +8147,7 @@ fn lock_git_sha() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -7823,7 +8232,7 @@ fn lock_requires_python() -> Result<()> {
     Resolved 17 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -7831,7 +8240,7 @@ fn lock_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7"
         resolution-markers = [
             "python_full_version >= '3.8'",
@@ -8111,7 +8520,7 @@ fn lock_requires_python() -> Result<()> {
     Resolved 13 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -8119,7 +8528,7 @@ fn lock_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7.9"
         resolution-markers = [
             "python_full_version >= '3.8'",
@@ -8328,7 +8737,7 @@ fn lock_requires_python() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -8336,7 +8745,7 @@ fn lock_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -8439,8 +8848,6 @@ fn lock_requires_python() -> Result<()> {
 fn lock_requires_python_upper() -> Result<()> {
     let context = uv_test::test_context!("3.11").with_exclude_newer("2024-08-29T00:00:00Z");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     // Require `==3.11.*`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8459,7 +8866,7 @@ fn lock_requires_python_upper() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -8467,7 +8874,7 @@ fn lock_requires_python_upper() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.11.*"
 
         [options]
@@ -8558,8 +8965,6 @@ fn lock_requires_python_upper() -> Result<()> {
 fn lock_requires_python_exact() -> Result<()> {
     let context = uv_test::test_context!("3.13.0");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -8578,7 +8983,7 @@ fn lock_requires_python_exact() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -8586,7 +8991,7 @@ fn lock_requires_python_exact() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.13"
 
         [options]
@@ -8687,8 +9092,6 @@ fn lock_requires_python_compatible_specifier() -> Result<()> {
 fn lock_requires_python_fork() -> Result<()> {
     let context = uv_test::test_context!("3.11").with_exclude_newer("2024-08-29T00:00:00Z");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -8706,7 +9109,7 @@ fn lock_requires_python_fork() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -8714,7 +9117,7 @@ fn lock_requires_python_fork() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.9"
 
         [options]
@@ -8773,7 +9176,7 @@ fn lock_requires_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels"
 
         [root]
@@ -8794,7 +9197,6 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
         sdist = false
         wheel_tags = ["cp313-cp313-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -8821,7 +9223,7 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version >= '3.13'",
@@ -8900,7 +9302,7 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels_future() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels-future"
 
         [root]
@@ -8914,7 +9316,6 @@ fn lock_requires_python_fork_wheels_future() -> Result<()> {
 
         [packages.b.versions."1.0.0"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8940,7 +9341,7 @@ fn lock_requires_python_fork_wheels_future() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-fork-wheels-compatible"
 
         [root]
@@ -8967,7 +9368,6 @@ fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-freebsd_13_x86_64", "cp313-cp313-freebsd_13_x86_64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8993,7 +9393,7 @@ fn lock_requires_python_fork_wheels_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_wheels_stable_abi() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "requires-python-wheels-stable-abi"
 
         [root]
@@ -9005,7 +9405,6 @@ fn lock_requires_python_wheels_stable_abi() -> Result<()> {
         sdist = false
         wheel_tags = ["cp313-abi3-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -9037,8 +9436,6 @@ fn lock_requires_python_wheels_stable_abi() -> Result<()> {
 fn lock_requires_python_wheels() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     // Require ==3.12.*.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9058,7 +9455,7 @@ fn lock_requires_python_wheels() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9066,7 +9463,7 @@ fn lock_requires_python_wheels() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.12.*"
 
         [options]
@@ -9137,7 +9534,7 @@ fn lock_requires_python_wheels() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9145,7 +9542,7 @@ fn lock_requires_python_wheels() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.11.*"
 
         [options]
@@ -9207,8 +9604,6 @@ fn lock_requires_python_wheels() -> Result<()> {
 fn lock_requires_python_star() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9226,7 +9621,7 @@ fn lock_requires_python_star() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9234,7 +9629,7 @@ fn lock_requires_python_star() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.11.*"
 
         [options]
@@ -9324,8 +9719,6 @@ fn lock_requires_python_star() -> Result<()> {
 fn lock_requires_python_not_equal() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9343,7 +9736,7 @@ fn lock_requires_python_not_equal() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9351,7 +9744,7 @@ fn lock_requires_python_not_equal() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">3.10, !=3.10.9, !=3.10.10, !=3.11.*, <3.13"
 
         [options]
@@ -9396,8 +9789,6 @@ fn lock_requires_python_not_equal() -> Result<()> {
 fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
     let context = uv_test::test_context!("3.13");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9415,7 +9806,7 @@ fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9423,7 +9814,7 @@ fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10, !=3.11.*, !=3.12.*, <3.14"
 
         [options]
@@ -9470,8 +9861,6 @@ fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
 fn lock_requires_python_pre() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9489,7 +9878,7 @@ fn lock_requires_python_pre() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9497,7 +9886,7 @@ fn lock_requires_python_pre() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -9586,8 +9975,6 @@ fn lock_requires_python_pre() -> Result<()> {
 fn lock_requires_python_unbounded() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9606,7 +9993,7 @@ fn lock_requires_python_unbounded() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9614,7 +10001,7 @@ fn lock_requires_python_unbounded() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "<=3.12"
         resolution-markers = [
             "python_full_version >= '3.7'",
@@ -9721,8 +10108,6 @@ fn lock_requires_python_disjoint() -> Result<()> {
 fn lock_requires_python_maximum_version() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9740,7 +10125,7 @@ fn lock_requires_python_maximum_version() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9748,7 +10133,7 @@ fn lock_requires_python_maximum_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.8"
         resolution-markers = [
             "python_full_version >= '3.9'",
@@ -9872,8 +10257,6 @@ fn lock_requires_python_maximum_version() -> Result<()> {
 fn lock_requires_python_fewest_versions() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -9894,7 +10277,7 @@ fn lock_requires_python_fewest_versions() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -9902,7 +10285,7 @@ fn lock_requires_python_fewest_versions() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.8"
 
         [options]
@@ -9980,8 +10363,6 @@ fn lock_requires_python_fewest_versions() -> Result<()> {
 fn lock_python_version_marker_complement() -> Result<()> {
     let context = uv_test::test_context!("3.11");
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -10006,7 +10387,7 @@ fn lock_python_version_marker_complement() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -10014,7 +10395,7 @@ fn lock_python_version_marker_complement() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.8"
         resolution-markers = [
             "python_full_version >= '3.11'",
@@ -10121,7 +10502,7 @@ fn lock_dev() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -10227,7 +10608,7 @@ fn lock_conditional_unconditional() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -10300,7 +10681,7 @@ fn lock_multiple_markers() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -10410,7 +10791,7 @@ fn lock_relative_and_absolute_paths() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11, <3.13"
 
         [options]
@@ -10790,7 +11171,7 @@ fn lock_relative_transitive_workspace_paths() -> Result<()> {
 
     let shared_dependency_alias = context.temp_dir.child("shared-dependency-alias");
     create_symlink(shared_dependency.path(), shared_dependency_alias.path())?;
-    let shared_dependency_url = Url::from_file_path(shared_dependency_alias.path())
+    let shared_dependency_url = SafeUrl::from_file_path(shared_dependency_alias.path())
         .map_err(|()| anyhow::anyhow!("shared dependency path is not a valid file URL"))?;
 
     intermediate
@@ -10861,7 +11242,7 @@ fn lock_relative_transitive_archive_paths() -> Result<()> {
             .join("test/links/ok-1.0.0-py3-none-any.whl"),
         wheel.path(),
     )?;
-    let wheel_url = Url::from_file_path(wheel.path())
+    let wheel_url = SafeUrl::from_file_path(wheel.path())
         .map_err(|()| anyhow::anyhow!("wheel path is not a valid file URL"))?;
 
     let source_archive = context
@@ -10874,7 +11255,7 @@ fn lock_relative_transitive_archive_paths() -> Result<()> {
             .join("test/links/basic_package-0.1.0.tar.gz"),
         source_archive.path(),
     )?;
-    let source_archive_url = Url::from_file_path(source_archive.path())
+    let source_archive_url = SafeUrl::from_file_path(source_archive.path())
         .map_err(|()| anyhow::anyhow!("source archive path is not a valid file URL"))?;
 
     let project = context.temp_dir.child("project");
@@ -11013,7 +11394,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
     "#})?;
-    let child_url = Url::from_file_path(child.path())
+    let child_url = SafeUrl::from_file_path(child.path())
         .map_err(|()| anyhow::anyhow!("child path is not a valid file URL"))?;
 
     let active_child = context.temp_dir.child("active-child");
@@ -11028,7 +11409,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
             requires = ["hatchling"]
             build-backend = "hatchling.build"
         "#})?;
-    let active_child_url = Url::from_file_path(active_child.path())
+    let active_child_url = SafeUrl::from_file_path(active_child.path())
         .map_err(|()| anyhow::anyhow!("active child path is not a valid file URL"))?;
 
     let relative_child = context.temp_dir.child("relative-child");
@@ -11045,16 +11426,16 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
             requires = ["hatchling"]
             build-backend = "hatchling.build"
         "#})?;
-    let relative_child_url = Url::from_file_path(relative_child.path())
+    let relative_child_url = SafeUrl::from_file_path(relative_child.path())
         .map_err(|()| anyhow::anyhow!("relative child path is not a valid file URL"))?;
     let relative_child_alias = context.temp_dir.child("relative-child-alias");
     create_symlink(relative_child.path(), relative_child_alias.path())?;
-    let relative_child_alias_url = Url::from_file_path(relative_child_alias.path())
+    let relative_child_alias_url = SafeUrl::from_file_path(relative_child_alias.path())
         .map_err(|()| anyhow::anyhow!("relative child alias is not a valid file URL"))?;
 
     // Discover the ordinary parent through configured metadata to keep the baseline deterministic.
     let parent = context.temp_dir.child("parent");
-    let parent_url = Url::from_file_path(parent.path())
+    let parent_url = SafeUrl::from_file_path(parent.path())
         .map_err(|()| anyhow::anyhow!("parent path is not a valid file URL"))?;
 
     let project = indoc! {r#"
@@ -11300,9 +11681,9 @@ fn lock_ignored_dependency_metadata_paths() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
     "#})?;
-    let active_child_url = Url::from_file_path(active_child.path())
+    let active_child_url = SafeUrl::from_file_path(active_child.path())
         .map_err(|()| anyhow::anyhow!("active child path is not a valid file URL"))?;
-    let inactive_child_url = Url::from_file_path(inactive_child.path())
+    let inactive_child_url = SafeUrl::from_file_path(inactive_child.path())
         .map_err(|()| anyhow::anyhow!("inactive child path is not a valid file URL"))?;
 
     let parent = context.temp_dir.child("parent");
@@ -11447,7 +11828,7 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11, <3.13"
 
         [options]
@@ -11547,7 +11928,7 @@ fn lock_constraint_dependency_absolute_path() -> Result<()> {
 
     // Check the lockfile - the absolute path should stay absolute, and sniffio
     // should be resolved from the local path rather than PyPI.
-    let lock = fs_err::read_to_string(context.temp_dir.join("project/uv.lock"))?;
+    let lock = context.read("project/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -11555,7 +11936,7 @@ fn lock_constraint_dependency_absolute_path() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -11685,7 +12066,7 @@ fn lock_index_absolute_path_from_config() -> Result<()> {
     ");
 
     // Check the lockfile - the absolute path should stay absolute.
-    let lock = fs_err::read_to_string(project.join("uv.lock"))?;
+    let lock = context.read("project/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -11693,7 +12074,7 @@ fn lock_index_absolute_path_from_config() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -11755,7 +12136,7 @@ fn lock_cycles() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -11950,7 +12331,7 @@ fn lock_new_extras() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -12071,7 +12452,7 @@ fn lock_new_extras() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -12346,7 +12727,7 @@ fn lock_metadata_free_new_extra_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12493,8 +12874,8 @@ fn lock_mixed_hashes() -> Result<()> {
           </body>
         </html>
     "#,
-        Url::from_file_path(&wheel).unwrap().as_str(),
-        Url::from_file_path(&sdist).unwrap().as_str(),
+        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
+        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
     })?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -12508,10 +12889,10 @@ fn lock_mixed_hashes() -> Result<()> {
         [tool.uv]
         extra-index-url = ["{}"]
         "#,
-        Url::from_file_path(&root).unwrap().as_str()
+        SafeUrl::from_file_path(&root).unwrap().as_str()
     })?;
 
-    let index_url = Url::from_file_path(&root).unwrap().to_string();
+    let index_url = SafeUrl::from_file_path(&root).unwrap().to_string();
     let filters = [(index_url.as_str(), "file://[TMP]")]
         .into_iter()
         .chain(context.filters())
@@ -12532,7 +12913,7 @@ fn lock_mixed_hashes() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.13"
 
         [[package]]
@@ -12589,8 +12970,8 @@ fn lock_mixed_hashes() -> Result<()> {
           </body>
         </html>
     "#,
-        Url::from_file_path(&wheel).unwrap().as_str(),
-        Url::from_file_path(&sdist).unwrap().as_str(),
+        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
+        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
     })?;
 
     // Lock again with `--refresh` to pick up the SHA512 hash from the updated index.
@@ -12608,7 +12989,7 @@ fn lock_mixed_hashes() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.13"
 
         [[package]]
@@ -12651,7 +13032,7 @@ fn lock_mixed_hashes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_core_metadata_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let index_server = MockServer::start().await;
     let artifact_server = MockServer::start().await;
 
@@ -12842,7 +13223,7 @@ async fn lock_index_hash_algorithm() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.13"
 
         [[package]]
@@ -12881,7 +13262,7 @@ async fn lock_index_hash_algorithm() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.13"
 
         [[package]]
@@ -12919,7 +13300,7 @@ async fn lock_index_hash_algorithm() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_index_hash_algorithm_missing() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_filtered_http_retries();
     let server = PackageServer::new(&"basic-package".parse()?).await;
     let wheel_filename = "basic_package-0.1.0-py3-none-any.whl";
 
@@ -13011,7 +13392,7 @@ fn lock_resolution_mode() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -13086,7 +13467,7 @@ fn lock_resolution_mode() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -13228,7 +13609,7 @@ fn lock_prerelease_package_configuration() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -13351,8 +13732,8 @@ fn lock_same_version_multiple_urls() -> Result<()> {
           "dependency @ {} ; sys_platform != 'darwin'",
         ]
         "#,
-        Url::from_file_path(context.temp_dir.join("v1")).unwrap(),
-        Url::from_file_path(context.temp_dir.join("v2")).unwrap(),
+        SafeUrl::from_file_path(context.temp_dir.join("v1")).unwrap(),
+        SafeUrl::from_file_path(context.temp_dir.join("v2")).unwrap(),
     })?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -13369,7 +13750,7 @@ fn lock_same_version_multiple_urls() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -13573,7 +13954,7 @@ fn lock_exclusion() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(child.join("uv.lock")).unwrap();
+    let lock = context.read("child/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -13581,7 +13962,7 @@ fn lock_exclusion() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -13887,7 +14268,7 @@ fn lock_workspace_member_with_standalone_path_source() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -13975,7 +14356,7 @@ fn lock_external_workspace_source() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(project.join("uv.lock"))?;
+    let lock = context.read("project/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -13983,7 +14364,7 @@ fn lock_external_workspace_source() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14161,7 +14542,7 @@ fn lock_peer_member() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.child("project").child("uv.lock")).unwrap();
+    let lock = context.read("project/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -14169,7 +14550,7 @@ fn lock_peer_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14257,7 +14638,7 @@ fn lock_workspace_member_with_fragment_delimiter() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14358,7 +14739,7 @@ async fn lock_index_workspace_member() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -14366,7 +14747,7 @@ async fn lock_index_workspace_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14506,7 +14887,7 @@ fn lock_dev_transitive() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(bar.join("uv.lock")).unwrap();
+    let lock = context.read("bar/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -14514,7 +14895,7 @@ fn lock_dev_transitive() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14614,7 +14995,9 @@ async fn lock_redact_http() -> Result<()> {
     // which in turns means we don't use the test context cache location.
     // We should probably add a way to configure the `--no-cache` temporary
     // directory location during testing.
-    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_link_mode_warning()
+        .with_filtered_http_retries();
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14643,7 +15026,7 @@ async fn lock_redact_http() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14685,7 +15068,7 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
 
     hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
@@ -14696,7 +15079,7 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
 
     hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
@@ -14726,7 +15109,7 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
 
     hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
@@ -14876,7 +15259,7 @@ fn lock_redact_git_pep508() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -14955,7 +15338,7 @@ fn lock_redact_git_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15032,7 +15415,7 @@ fn lock_redact_git_pep508_non_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15108,7 +15491,7 @@ async fn lock_redact_index_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15189,7 +15572,7 @@ async fn lock_redact_url_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15279,7 +15662,7 @@ async fn lock_env_credentials() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     // The lockfile should omit the credentials.
     insta::with_settings!({
@@ -15288,7 +15671,7 @@ async fn lock_env_credentials() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15415,10 +15798,10 @@ async fn lock_multiple_indexes_same_realm_different_credentials_trailing_slash()
 
 /// Resolve against an index that uses relative links.
 #[cfg(feature = "test-universal")]
-#[tokio::test]
-async fn lock_relative_index() -> Result<()> {
+#[test]
+fn lock_relative_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let server = PackseServer::new("simple/single-package.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -15427,12 +15810,12 @@ async fn lock_relative_index() -> Result<()> {
         name = "foo"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["a"]
 
         [tool.uv]
-        index-url = "{proxy_uri}/relative/simple"
+        index-url = "{index_url}"
         "#,
-        proxy_uri = proxy.uri()
+        index_url = server.relative_index_url()
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -15449,31 +15832,31 @@ async fn lock_relative_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/relative/simple/" }
+        sdist = { url = "http://[LOCALHOST]/relative/files/a-2.0.0.tar.gz", hash = "sha256:9610291c2bd57390019f58ca72d0dd4584bb9e7073fa347633ed8bc7267fccfe", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/relative/files/a-2.0.0-py3-none-any.whl", hash = "sha256:833374310e0a15880f3be9e6d082f527c9ac70129b2054d733da9b754315361f", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
         name = "foo"
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "a" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "http://[LOCALHOST]/relative/simple" }
-        sdist = { url = "http://[LOCALHOST]/files/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
+        requires-dist = [{ name = "a" }]
         "#
         );
     });
@@ -15485,14 +15868,16 @@ async fn lock_relative_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Use a fresh cache so the wheel is fetched from the URL in the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-cache").arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + a==2.0.0
     ");
+
+    context.assert_installed("a", "2.0.0");
 
     Ok(())
 }
@@ -15554,7 +15939,7 @@ fn lock_no_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15639,7 +16024,7 @@ fn lock_no_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15805,7 +16190,7 @@ fn lock_migrate() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15899,7 +16284,7 @@ fn lock_upgrade_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -15989,7 +16374,7 @@ fn lock_upgrade_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -16067,7 +16452,7 @@ fn lock_upgrade_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -16600,7 +16985,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -16608,7 +16993,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -16713,7 +17098,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -16721,7 +17106,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -16825,7 +17210,7 @@ fn lock_find_links_relative_url() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -16833,7 +17218,7 @@ fn lock_find_links_relative_url() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -16933,7 +17318,7 @@ fn lock_find_links_local_sdist() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -16941,7 +17326,7 @@ fn lock_find_links_local_sdist() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17017,7 +17402,7 @@ fn lock_find_links_http_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    assert!(context.cache_dir.child("flat-index-v5").is_dir());
+    assert!(context.cache_dir.child("flat-index-v7").is_dir());
 
     let lock = context.read("uv.lock");
 
@@ -17027,7 +17412,7 @@ fn lock_find_links_http_wheel() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17111,7 +17496,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17203,7 +17588,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
         [tool.uv.sources]
         tqdm = {{ index = "local" }}
         "#,
-        Url::from_file_path(context.temp_dir.join("links/")).unwrap()
+        SafeUrl::from_file_path(context.temp_dir.join("links/")).unwrap()
     })?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
@@ -17213,7 +17598,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -17221,7 +17606,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17300,7 +17685,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
         format = "flat"
         url = "{}"
         "#,
-        Url::from_file_path(context.temp_dir.join("links/")).unwrap()
+        SafeUrl::from_file_path(context.temp_dir.join("links/")).unwrap()
     })?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
@@ -17310,7 +17695,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -17318,7 +17703,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17393,7 +17778,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
         format = "flat"
         url = "{}"
         "#,
-        Url::from_file_path(context.temp_dir.join("links/")).unwrap()
+        SafeUrl::from_file_path(context.temp_dir.join("links/")).unwrap()
     })?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
@@ -17403,7 +17788,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -17411,7 +17796,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17507,8 +17892,8 @@ fn lock_local_index() -> Result<()> {
           </body>
         </html>
     "#,
-        Url::from_file_path(wheel).unwrap().as_str(),
-        Url::from_file_path(sdist).unwrap().as_str(),
+        SafeUrl::from_file_path(wheel).unwrap().as_str(),
+        SafeUrl::from_file_path(sdist).unwrap().as_str(),
     })?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -17522,7 +17907,7 @@ fn lock_local_index() -> Result<()> {
         [tool.uv]
         extra-index-url = ["{}"]
         "#,
-        Url::from_file_path(&root).unwrap().as_str()
+        SafeUrl::from_file_path(&root).unwrap().as_str()
     })?;
 
     uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
@@ -17533,7 +17918,7 @@ fn lock_local_index() -> Result<()> {
 
     let lock = context.read("uv.lock");
 
-    let index = Url::from_file_path(&root).unwrap().to_string();
+    let index = SafeUrl::from_file_path(&root).unwrap().to_string();
     let filters = [(index.as_str(), "file://[TMP]")]
         .into_iter()
         .chain(context.filters())
@@ -17545,7 +17930,7 @@ fn lock_local_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.13"
 
         [[package]]
@@ -17625,7 +18010,7 @@ fn lock_sources_url() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17802,7 +18187,7 @@ fn lock_sources_archive() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["workspace @ {}"]
         "#,
-        Url::from_file_path(&workspace_archive).unwrap(),
+        SafeUrl::from_file_path(&workspace_archive).unwrap(),
     })?;
 
     uv_snapshot!( context.lock(), @"
@@ -17819,7 +18204,7 @@ fn lock_sources_archive() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -17914,16 +18299,39 @@ fn lock_sources_archive() -> Result<()> {
 fn lock_sources_source_tree() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Download the source.
-    let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_to_disk(
-        "https://github.com/user-attachments/files/16592193/workspace.zip",
-        &workspace_archive,
-    );
+    let workspace = context.temp_dir.child("workspace");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "workspace"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio"]
 
-    // Unzip the file.
-    let file = fs_err::File::open(&*workspace_archive)?;
-    uv_extract::unzip(file, &context.temp_dir)?;
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+
+        [tool.uv.workspace]
+        members = ["anyio"]
+
+        [tool.uv.sources]
+        anyio = { workspace = true }
+    "#})?;
+    workspace.child("src/workspace/__init__.py").touch()?;
+
+    let anyio = workspace.child("anyio");
+    anyio.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "anyio"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    anyio.child("src/anyio/__init__.py").touch()?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {
@@ -17935,17 +18343,12 @@ fn lock_sources_source_tree() -> Result<()> {
         dependencies = ["workspace @ file://{}"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.hatch.metadata]
-        allow-direct-references = true
-
-        [tool.hatch.build.targets.wheel]
-        packages = ["src/project"]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
         context.temp_dir.child("workspace").portable_display()
     })?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -17961,7 +18364,7 @@ fn lock_sources_source_tree() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18090,7 +18493,7 @@ fn lock_editable() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18206,8 +18609,8 @@ fn lock_mixed_extras() -> Result<()> {
         async = ["iniconfig>=2"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     leaf1.child("src/leaf1/__init__.py").touch()?;
 
@@ -18221,8 +18624,8 @@ fn lock_mixed_extras() -> Result<()> {
         dependencies = ["leaf2"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
 
         [tool.uv.sources]
         leaf2 = { workspace = true }
@@ -18244,8 +18647,8 @@ fn lock_mixed_extras() -> Result<()> {
         async = ["packaging>=24"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     leaf2.child("src/leaf2/__init__.py").touch()?;
 
@@ -18257,7 +18660,7 @@ fn lock_mixed_extras() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace1.join("uv.lock")).unwrap();
+    let lock = context.read("workspace1/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -18265,7 +18668,7 @@ fn lock_mixed_extras() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18430,8 +18833,8 @@ fn lock_transitive_extra() -> Result<()> {
         async = ["iniconfig>=2"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     leaf.child("src/leaf/__init__.py").touch()?;
 
@@ -18443,7 +18846,7 @@ fn lock_transitive_extra() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(workspace.join("uv.lock")).unwrap();
+    let lock = context.read("workspace/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -18451,7 +18854,7 @@ fn lock_transitive_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18591,7 +18994,7 @@ fn lock_mismatched_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18632,7 +19035,7 @@ fn lock_mismatched_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18697,7 +19100,7 @@ fn lock_mismatched_versions() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18780,7 +19183,7 @@ fn lock_no_sources_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18884,7 +19287,7 @@ fn lock_no_sources_package_multiple() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -18998,7 +19401,7 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -19104,7 +19507,7 @@ fn lock_no_sources_package_env_var() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -19415,7 +19818,7 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
 
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11"
 
     [options]
@@ -19558,7 +19961,7 @@ fn normalize_false_marker_dependency_groups() -> Result<()> {
 
     let local = context.temp_dir.child("local");
     local.create_dir_all()?;
-    let local_url = Url::from_file_path(local.path())
+    let local_url = SafeUrl::from_file_path(local.path())
         .map_err(|()| anyhow::anyhow!("local path is not a valid file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -19594,7 +19997,7 @@ fn normalize_false_marker_dependency_groups() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -19660,7 +20063,7 @@ fn normalize_false_marker_requires_dist() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -19718,7 +20121,7 @@ fn lock_impossible_platform_markers() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.9"
 
         [options]
@@ -19772,7 +20175,7 @@ async fn lock_change_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -19816,7 +20219,7 @@ async fn lock_change_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -19905,7 +20308,7 @@ fn lock_remove_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20022,7 +20425,7 @@ fn lock_remove_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20124,7 +20527,7 @@ fn lock_remove_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20180,7 +20583,7 @@ fn lock_add_member_with_build_system() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20278,7 +20681,7 @@ fn lock_add_member_with_build_system() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20377,7 +20780,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20471,7 +20874,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20583,7 +20986,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20691,7 +21094,7 @@ fn lock_redundant_add_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20789,7 +21192,7 @@ fn lock_redundant_add_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20879,7 +21282,7 @@ fn lock_new_constraints() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -20979,7 +21382,7 @@ fn lock_new_constraints() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -21082,7 +21485,7 @@ fn lock_remove_member_non_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -21184,7 +21587,7 @@ fn lock_remove_member_non_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -21229,7 +21632,7 @@ fn lock_rename_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -21303,7 +21706,7 @@ fn lock_rename_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -21335,7 +21738,7 @@ fn lock_rename_project() -> Result<()> {
     Ok(())
 }
 
-/// Write metadata-free revision 1.4 locks without invalidating fresh revision 1.3 locks.
+/// Write metadata-free locks without invalidating locks that include package metadata.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_writes_without_package_metadata() -> Result<()> {
@@ -21368,7 +21771,7 @@ fn lock_writes_without_package_metadata() -> Result<()> {
     let preview_lock = context.read("uv.lock");
     assert_snapshot!(preview_lock, @r#"
     version = 1
-    revision = 4
+    revision = 5
     requires-python = ">=3.12"
 
     [options]
@@ -21397,8 +21800,7 @@ fn lock_writes_without_package_metadata() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // Re-lock without the preview feature, causing the lockfile to be invalid and be reverted to
-    // 1.3.
+    // Re-lock without the preview feature, restoring the package metadata.
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -21408,7 +21810,7 @@ fn lock_writes_without_package_metadata() -> Result<()> {
     let standard_lock = context.read("uv.lock");
     assert_snapshot!(standard_lock, @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.12"
 
     [options]
@@ -21667,7 +22069,12 @@ fn lock_without_metadata_conflicting_group_with_extra_and_different_specifiers()
 fn lock_metadata_free_many_conflicts() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let extra_declarations = (1..=24)
-        .map(|conflict_number| format!("a{conflict_number} = []\nb{conflict_number} = []"))
+        .map(|conflict_number| {
+            formatdoc! {"
+                a{conflict_number} = []
+                b{conflict_number} = []"
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let project_conflicts = (1..=24)
@@ -21738,7 +22145,7 @@ fn lock_metadata_free_many_conflicts() -> Result<()> {
         .child("uv.lock")
         .write_str(&formatdoc! {r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [
         {lock_conflicts}
@@ -21853,43 +22260,91 @@ fn lock_metadata_free_frozen_empty_extra() -> Result<()> {
     -e ./provider
     ");
 
-    let original_lock = context.read("uv.lock");
-    insta::allow_duplicates! {
-        for section in ["optional-dependencies", "dev-dependencies"] {
-            let mut lock = original_lock.parse::<toml_edit::DocumentMut>()?;
-            let Some(packages) = lock["package"].as_array_of_tables_mut() else {
-                anyhow::bail!("lockfile did not contain a package array");
-            };
-            let Some(provider) = packages
-                .iter_mut()
-                .find(|package| package["name"].as_str() == Some("provider"))
-            else {
-                anyhow::bail!("lockfile did not contain the provider");
-            };
-            let Some(selections) = provider[section].as_table_mut() else {
-                anyhow::bail!("provider did not contain {section}");
-            };
-            selections.remove("empty");
-            context
-                .temp_dir
-                .child("uv.lock")
-                .write_str(&lock.to_string())?;
+    // Omitting the provider's empty extra makes the metadata-free lock stale.
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
 
-            uv_snapshot!(context.filters(), context.lock()
-                .arg("--preview-features")
-                .arg("lock-without-metadata")
-                .arg("--locked")
-                .arg("--offline"), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 2 packages in [TIME]
-            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
 
-            hint: To update the lockfile, run `uv lock`.
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+        [manifest]
+        members = ["project", "provider"]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        empty = []
+
+        [package.dev-dependencies]
+        empty = []
+
+        [[package]]
+        name = "provider"
+        version = "1.0.0"
+        source = { editable = "provider" }
+
+        [package.dev-dependencies]
+        empty = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--preview-features", "lock-without-metadata", "--locked", "--offline",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Omitting the provider's empty group also makes the metadata-free lock stale.
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = ["project", "provider"]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        empty = []
+
+        [package.dev-dependencies]
+        empty = []
+
+        [[package]]
+        name = "provider"
+        version = "1.0.0"
+        source = { editable = "provider" }
+
+        [package.optional-dependencies]
+        empty = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--preview-features", "lock-without-metadata", "--locked", "--offline",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
     Ok(())
 }
@@ -21922,7 +22377,7 @@ fn lock_removed_empty_extra() -> Result<()> {
         assert_snapshot!(
             context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -22203,7 +22658,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
         .arg("--locked")
         .arg("--offline")
         .arg("--no-cache")
-        .env("RUST_LOG", "uv::commands::project::lock=debug"), @"
+        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -22218,7 +22673,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
 #[test]
 fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.13");
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "nested-group-conditional-registry-constraint"
 
         [root]
@@ -22237,7 +22692,6 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         second = []
         third = []
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -22284,7 +22738,7 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         .arg("--no-cache")
         .arg("--index-url")
         .arg(server.index_url())
-        .env("RUST_LOG", "uv::commands::project::lock=debug"), @"
+        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -22360,7 +22814,7 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
             .as_inline_table()
             .and_then(|dependency| dependency.get("marker"))
             .and_then(toml_edit::Value::as_str)
-            .is_some_and(|marker| marker.starts_with("sys_platform == 'win32' or"))
+            .is_some_and(|marker| marker == "sys_platform == 'win32'")
     }) else {
         anyhow::bail!("other dependency group did not contain its base edge");
     };
@@ -22413,13 +22867,34 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         .child("uv.lock")
         .write_str(&original_lock)?;
 
-    let pyproject = context
-        .read("pyproject.toml")
-        .replace("ok==1.0.0", "ok==2.0.0");
+    // Changing the Windows constraint requires a new resolution.
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&pyproject)?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["ok[first]>=1,<3 ; python_full_version < '3.13' or sys_platform != 'win32'"]
+        other = ["ok[second]>=1,<3 ; sys_platform == 'win32'"]
+        nested = [
+            { include-group = "dev" },
+            "ok[third]>=1,<3 ; python_full_version < '3.13' or sys_platform != 'win32'",
+        ]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "ok", extra = "first" },
+            { package = "ok", extra = "second" },
+        ]]
+        constraint-dependencies = ["ok==2.0.0 ; sys_platform == 'win32'"]
+
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.13" }
+        "#})?;
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
@@ -22704,7 +23179,7 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because your project depends on itself at an incompatible version (project>=2.0.0), we can conclude that your project's requirements are unsatisfiable.
+      cause: Because your project has an incompatible dependency on itself, we can conclude that your project's requirements are unsatisfiable.
 
     hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
@@ -23674,7 +24149,7 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
         .assert()
         .success();
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir
@@ -23974,7 +24449,7 @@ fn lock_metadata_free_overridden_recursive_extra_source() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    let child_url = Url::from_file_path(context.temp_dir.child("child").path())
+    let child_url = SafeUrl::from_file_path(context.temp_dir.child("child").path())
         .map_err(|()| anyhow::anyhow!("child path is not a valid file URL"))?;
     pyproject_toml.write_str(&formatdoc! {r#"
         [project]
@@ -24156,7 +24631,7 @@ fn lock_metadata_free_shared_backend_direct_source() -> Result<()> {
             )
             return dist_info.name
         "#,
-            child_url = Url::from_file_path(context.temp_dir.child("child").path())
+            child_url = SafeUrl::from_file_path(context.temp_dir.child("child").path())
                 .map_err(|()| anyhow!("failed to construct a file URL for the local child"))?,
         })?;
 
@@ -24343,7 +24818,7 @@ fn lock_metadata_free_shared_static_metadata_direct_source() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    let pyproject = fs_err::read_to_string(pyproject_toml.path())?;
+    let pyproject = context.read("pyproject.toml");
     pyproject_toml.write_str(&pyproject.replace(
         &format!(
             r#"six = {{ url = "{}" }}
@@ -24535,7 +25010,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
 
     lockfile.write_str(&formatdoc! {r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -24684,7 +25159,7 @@ fn lock_missing_metadata() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -24833,7 +25308,7 @@ fn lock_dev_dependencies_alias() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -24914,7 +25389,7 @@ fn lock_reorder() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -25040,15 +25515,13 @@ fn lock_narrowed_python_version_upper() -> Result<()> {
         "#,
     )?;
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -25056,7 +25529,7 @@ fn lock_narrowed_python_version_upper() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7, <4"
         resolution-markers = [
             "python_full_version >= '3.10'",
@@ -25146,15 +25619,13 @@ fn lock_narrowed_python_version() -> Result<()> {
         "#,
     )?;
 
-    let lockfile = context.temp_dir.join("uv.lock");
-
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(&lockfile).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -25162,7 +25633,7 @@ fn lock_narrowed_python_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7"
         resolution-markers = [
             "python_full_version >= '3.11'",
@@ -25257,7 +25728,7 @@ fn lock_exclude_unnecessary_python_forks() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -25360,7 +25831,7 @@ fn lock_constrained_environment() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -25525,7 +25996,7 @@ fn lock_constrained_environment() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -25669,7 +26140,7 @@ fn lock_constrained_environment_non_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -25848,7 +26319,7 @@ fn lock_non_project_fork() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10"
         resolution-markers = [
             "python_full_version >= '3.11'",
@@ -26025,7 +26496,7 @@ fn lock_non_project_conditional() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26124,7 +26595,7 @@ fn lock_non_project_group() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10"
 
         [options]
@@ -26254,7 +26725,7 @@ fn lock_non_project_group_standard() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10"
 
         [options]
@@ -26340,7 +26811,7 @@ fn lock_non_project_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26464,7 +26935,7 @@ fn lock_non_project_member_conflicts() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         conflicts = [[
             { package = "member-a" },
@@ -26621,7 +27092,7 @@ fn lock_dropped_dev_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26728,7 +27199,7 @@ fn lock_empty_dev_dependencies() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26824,7 +27295,7 @@ fn lock_empty_dependency_group() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26914,7 +27385,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -26989,7 +27460,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27064,7 +27535,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27137,7 +27608,7 @@ fn lock_trailing_slash_index_url() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27251,7 +27722,7 @@ fn lock_invalid_index() -> Result<()> {
          |                ^^^^^^^^^^^^^^^^
       Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
 
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 9, column 31
                |
              9 |         iniconfig = { index = "internal proxy" }
@@ -27292,7 +27763,7 @@ fn lock_explicit_index() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27300,7 +27771,7 @@ fn lock_explicit_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27398,7 +27869,7 @@ fn lock_explicit_default_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27406,7 +27877,7 @@ fn lock_explicit_default_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27454,38 +27925,38 @@ fn lock_explicit_default_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--verbose"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    DEBUG Found workspace root: `[TEMP_DIR]/`
-    DEBUG Adding root workspace member: `[TEMP_DIR]/`
+    DEBUG Found workspace root: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
     DEBUG Found workspace configuration at `[TEMP_DIR]/pyproject.toml`
-    DEBUG Searching for user configuration in: `[UV_USER_CONFIG_DIR]/uv.toml`
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
-    DEBUG Found project root: `[TEMP_DIR]/`
+    DEBUG Found project root: [TEMP_DIR]/
     DEBUG No Python version file found in workspace: [TEMP_DIR]/
     DEBUG Using Python request `>=3.12` from `requires-python` metadata
-    DEBUG Checking for Python environment at: `.venv`
+    DEBUG Checking for Python environment at: .venv
     DEBUG The project environment's Python version satisfies the request: `Python >=3.12`
     DEBUG Using request connect timeout of [TIME] and read timeout of [TIME]
     DEBUG Found static `requires-dist` for: [TEMP_DIR]/
     DEBUG Resolving despite existing lockfile due to mismatched requirements for: `project==0.1.0`
       Requested: {Requirement { name: PackageName("anyio"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([]), index: None, conflict: None }, scope: Global, origin: None }}
-      Existing: {Requirement { name: PackageName("iniconfig"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([VersionSpecifier { operator: Equal, version: "2" }]), index: Some(IndexMetadata { url: Url(VerbatimUrl { url: DisplaySafeUrl { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("test.pypi.org")), port: None, path: "/simple", query: None, fragment: None }, given: None, expanded: false, force_relative: false }), format: Simple }), conflict: None }, scope: Global, origin: None }}
+      Existing: {Requirement { name: PackageName("iniconfig"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([VersionSpecifier { operator: Equal, version: "2" }]), index: Some(IndexMetadata { url: Url(VerbatimUrl { url: SafeUrl { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("test.pypi.org")), port: None, path: "/simple", query: None, fragment: None }, given: None, expanded: false, force_relative: false }), format: Simple }), conflict: None }, scope: Global, origin: None }}
     DEBUG Found static `pyproject.toml` for: project @ file://[TEMP_DIR]/
     DEBUG Solving with installed Python version: 3.12.[X]
     DEBUG Solving with target Python version: >=3.12
     DEBUG Solving with exclude-newer: global: 2024-03-25T00:00:00Z
     DEBUG Adding direct dependency: project*
-    DEBUG Searching for a compatible version of project @ file://[TEMP_DIR]/ (*)
+    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (*)
     DEBUG Adding direct dependency: anyio*
     DEBUG Searching for a compatible version of anyio (*)
     DEBUG No compatible version found for: anyio
     DEBUG Recording unit propagation conflict of anyio from incompatibility of (project)
-    DEBUG Searching for a compatible version of project @ file://[TEMP_DIR]/ (<0.1.0 | >0.1.0)
+    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (<0.1.0 | >0.1.0)
     DEBUG No compatible version found for: project
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
     "#);
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27493,7 +27964,7 @@ fn lock_explicit_default_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27556,7 +28027,7 @@ fn lock_unnamed_explicit_index() -> Result<()> {
         |         ^^^^^^^^^^^^^^^^^
       An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
 
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 8, column 9
                |
              8 |         [[tool.uv.index]]
@@ -27601,7 +28072,7 @@ fn lock_invalid_index_cache_control() -> Result<()> {
          |         ^^^^^^^^^^^^^
       `cache-control.api` must be a valid HTTP header value
 
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 11, column 9
                 |
              11 |         cache-control.api = """
@@ -27649,7 +28120,7 @@ async fn lock_named_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27657,7 +28128,7 @@ async fn lock_named_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27716,7 +28187,7 @@ fn lock_default_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27724,7 +28195,7 @@ fn lock_default_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27776,7 +28247,7 @@ fn lock_default_index() -> Result<()> {
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27784,7 +28255,7 @@ fn lock_default_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -27851,7 +28322,7 @@ fn lock_named_index_cli() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -27859,7 +28330,7 @@ fn lock_named_index_cli() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28028,7 +28499,7 @@ fn lock_repeat_named_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 8, column 9
                |
              8 |         [[tool.uv.index]]
@@ -28069,7 +28540,7 @@ fn lock_multiple_default_indexes() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 8, column 9
                |
              8 |         [[tool.uv.index]]
@@ -28137,7 +28608,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -28145,7 +28616,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28224,7 +28695,7 @@ fn lock_unique_named_index() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -28232,7 +28703,7 @@ fn lock_unique_named_index() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28296,7 +28767,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -28304,7 +28775,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28361,7 +28832,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -28369,7 +28840,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28458,7 +28929,7 @@ fn lock_named_index_overlap() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -28466,7 +28937,7 @@ fn lock_named_index_overlap() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'linux'",
@@ -28547,7 +29018,7 @@ fn lock_explicit_virtual_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28758,7 +29229,7 @@ fn lock_implicit_virtual_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -28978,7 +29449,7 @@ fn lock_implicit_package_path() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -29149,7 +29620,7 @@ fn lock_split_python_environment() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.7"
         resolution-markers = [
             "python_full_version >= '3.8'",
@@ -29263,7 +29734,7 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
     }, {
         assert_snapshot!(context.read("requires-python/uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
             "python_full_version >= '3.12'",
@@ -29352,7 +29823,7 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
     }, {
         assert_snapshot!(context.read("fewest/uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
             "python_full_version < '3.12'",
@@ -29427,7 +29898,7 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
     }, {
         assert_snapshot!(context.read("lowest/uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
             "python_full_version < '3.12'",
@@ -29503,7 +29974,7 @@ fn lock_python_upper_bound() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.8"
         resolution-markers = [
             "python_full_version >= '3.9' and python_full_version < '3.13'",
@@ -29867,7 +30338,7 @@ fn lock_simplified_environments() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.11.*"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -29966,7 +30437,7 @@ fn lock_dependency_metadata() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -30182,7 +30653,7 @@ fn lock_dependency_metadata_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -30282,7 +30753,7 @@ fn lock_strip_fragment() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -30428,7 +30899,7 @@ fn lock_duplicate_sources() -> Result<()> {
         |         ^^^^^^^^^^^^^^^^
       duplicate key
 
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 9, column 9
                |
              9 |         python-multipart = { url = "https://files.pythonhosted.org/packages/c0/3e/9fbfd74e7f5b54f653f7ca99d44ceb56e718846920162165061c4c22b71a/python_multipart-0.0.8-py3-none-any.whl" }
@@ -30453,7 +30924,7 @@ fn lock_duplicate_sources() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 7, column 9
                |
              7 |         [tool.uv.sources]
@@ -30525,7 +30996,7 @@ fn lock_missing_name() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 1, column 1
                |
              1 | [project]
@@ -30554,7 +31025,7 @@ fn lock_missing_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 1, column 1
                |
              1 | [project]
@@ -30684,7 +31155,7 @@ fn lock_change_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version >= '3.13'",
@@ -30791,7 +31262,7 @@ fn lock_change_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10"
         resolution-markers = [
             "python_full_version >= '3.13'",
@@ -30927,7 +31398,7 @@ async fn lock_keyring_credentials() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     // The lockfile should omit the credentials.
     insta::with_settings!({
@@ -30936,7 +31407,7 @@ async fn lock_keyring_credentials() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -31114,7 +31585,7 @@ async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Resu
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     // The lockfile should omit the credentials.
     insta::with_settings!({
@@ -31123,7 +31594,7 @@ async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Resu
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -31175,7 +31646,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -31205,8 +31676,8 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
     exit_code: 2 (failure)
     ----- stderr -----
     warning: Attempted to fetch credentials using the `keyring` command, but it does not support `--mode creds`; upgrade to `keyring>=v25.2.1` or provide a username
-    error: Failed to fetch: `http://[LOCALHOST]/basic-auth/simple/iniconfig/`
-      cause: Missing credentials for http://[LOCALHOST]/basic-auth/simple/iniconfig/
+    error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
+      cause: Missing credentials for: http://[LOCALHOST]/basic-auth/simple/iniconfig/
     ");
 
     Ok(())
@@ -31248,7 +31719,7 @@ fn lock_multiple_sources() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -31331,7 +31802,7 @@ fn lock_multiple_sources_conflict() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: Failed to parse `tool.uv.sources`
       cause: Source markers must be disjoint, but the following markers overlap: `python_full_version == '3.12.*' and sys_platform == 'win32'` and `sys_platform == 'win32'`.
 
@@ -31366,7 +31837,7 @@ fn lock_multiple_sources_no_marker() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: Failed to parse `tool.uv.sources`
       cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
     "#);
@@ -31413,7 +31884,7 @@ fn lock_multiple_sources_index_disjoint_markers() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -31421,7 +31892,7 @@ fn lock_multiple_sources_index_disjoint_markers() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'win32'",
@@ -31539,7 +32010,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -31547,7 +32018,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'win32'",
@@ -31668,7 +32139,7 @@ fn lock_multiple_sources_index_non_total() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -31676,7 +32147,7 @@ fn lock_multiple_sources_index_non_total() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'win32'",
@@ -31764,7 +32235,7 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -31772,7 +32243,7 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'win32'",
@@ -31913,7 +32384,7 @@ fn lock_multiple_sources_non_total() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -32009,7 +32480,7 @@ fn lock_multiple_sources_respect_marker() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -32108,7 +32579,7 @@ fn lock_extra_marker_preserves_production_platform() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -32208,7 +32679,7 @@ fn lock_multiple_sources_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -32610,7 +33081,7 @@ fn lock_group_include() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -32811,7 +33282,7 @@ fn lock_group_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version >= '3.13'",
@@ -32846,6 +33317,9 @@ fn lock_group_requires_python() -> Result<()> {
         foo = [
             { name = "idna" },
         ]
+
+        [package.group-requires-python]
+        bar = ">=3.13"
 
         [package.metadata]
         requires-dist = [{ name = "typing-extensions" }]
@@ -32947,7 +33421,7 @@ fn lock_group_includes_requires_python() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version >= '3.13.1'",
@@ -32996,6 +33470,12 @@ fn lock_group_includes_requires_python() -> Result<()> {
             { name = "sniffio", marker = "python_full_version >= '3.13'" },
             { name = "sortedcontainers", marker = "python_full_version >= '3.13'" },
         ]
+
+        [package.group-requires-python]
+        bar = ">=3.13"
+        baz = ">=3.13,>=3.13.1"
+        blargh = ">=3.12.[X],>=3.13"
+        foo = ">=3.13"
 
         [package.metadata]
         requires-dist = [{ name = "typing-extensions" }]
@@ -33173,7 +33653,7 @@ fn lock_group_includes_requires_python_contradiction() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version >= '3.13'",
@@ -33208,6 +33688,10 @@ fn lock_group_includes_requires_python_contradiction() -> Result<()> {
         foo = [
             { name = "idna", marker = "python_full_version < '3.13'" },
         ]
+
+        [package.group-requires-python]
+        bar = ">=3.13"
+        foo = "<3.13,>=3.13"
 
         [package.metadata]
         requires-dist = [{ name = "typing-extensions" }]
@@ -33413,7 +33897,7 @@ fn lock_group_invalid_entry_group_name() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 9, column 16
                |
              9 |         foo = [{include-group = "invalid!"}]
@@ -33447,7 +33931,7 @@ fn lock_group_invalid_duplicate_group_name() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 8, column 9
                |
              8 |         [dependency-groups]
@@ -33539,7 +34023,7 @@ fn lock_group_invalid_entry_type() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 9, column 33
                |
              9 |         foo = [{include-group = true}]
@@ -33572,7 +34056,7 @@ fn lock_group_empty_entry_table() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 9, column 16
                |
              9 |         foo = [{}]
@@ -33643,7 +34127,7 @@ fn lock_group_workspace() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -33831,7 +34315,7 @@ fn lock_transitive_git() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -33975,7 +34459,7 @@ fn lock_dynamic_version() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -33983,7 +34467,7 @@ fn lock_dynamic_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34011,7 +34495,7 @@ fn lock_dynamic_version() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34019,7 +34503,7 @@ fn lock_dynamic_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34080,7 +34564,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34088,7 +34572,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34116,7 +34600,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34124,7 +34608,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34202,7 +34686,7 @@ fn lock_dynamic_version_no_build() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let pyproject = fs_err::read_to_string(pyproject_toml.path())?;
+    let pyproject = context.read("pyproject.toml");
     pyproject_toml.write_str(&pyproject.replace(
         "dependencies = []",
         indoc! {r#"
@@ -34303,7 +34787,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34311,7 +34795,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34370,7 +34854,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34378,7 +34862,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34486,7 +34970,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34494,7 +34978,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34547,7 +35031,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34555,7 +35039,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34645,7 +35129,7 @@ fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34653,7 +35137,7 @@ fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34813,7 +35297,7 @@ fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34821,7 +35305,7 @@ fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -34973,7 +35457,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -34981,7 +35465,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35014,7 +35498,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35022,7 +35506,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35087,7 +35571,7 @@ fn lock_shared_build_dependency() -> Result<()> {
     Resolved 7 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35095,7 +35579,7 @@ fn lock_shared_build_dependency() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.8"
         resolution-markers = [
             "python_full_version >= '3.9'",
@@ -35361,7 +35845,7 @@ fn lock_dynamic_to_static() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35369,7 +35853,7 @@ fn lock_dynamic_to_static() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35414,7 +35898,7 @@ fn lock_dynamic_to_static() -> Result<()> {
     Updated project (dynamic) -> v0.1.0
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35422,7 +35906,7 @@ fn lock_dynamic_to_static() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35466,7 +35950,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35474,7 +35958,7 @@ fn lock_static_to_dynamic() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35539,7 +36023,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     Updated project v0.1.0 -> (dynamic)
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35547,7 +36031,7 @@ fn lock_static_to_dynamic() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35585,7 +36069,7 @@ fn lock_bump_static_version() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35593,7 +36077,7 @@ fn lock_bump_static_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35635,7 +36119,7 @@ fn lock_bump_static_version() -> Result<()> {
     Updated project v0.1.0 -> v0.2.0
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -35643,7 +36127,7 @@ fn lock_bump_static_version() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -35911,7 +36395,7 @@ fn lock_relative_project() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36005,7 +36489,7 @@ fn lock_recursive_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36184,7 +36668,7 @@ fn lock_no_build_static_metadata() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36632,7 +37116,7 @@ fn lock_self_compatible() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36721,7 +37205,7 @@ fn lock_self_exact() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36800,7 +37284,7 @@ fn lock_self_incompatible() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because your project depends on itself at an incompatible version (project==0.2.0), we can conclude that your project's requirements are unsatisfiable.
+      cause: Because your project has an incompatible dependency on itself, we can conclude that your project's requirements are unsatisfiable.
 
     hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
@@ -36841,7 +37325,7 @@ fn lock_self_extra_to_extra_compatible() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -36997,7 +37481,7 @@ fn lock_self_extra_compatible() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -37118,7 +37602,7 @@ fn lock_self_marker_compatible() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -37240,7 +37724,7 @@ fn lock_split_on_windows() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform != 'win32'",
@@ -37359,7 +37843,7 @@ fn lock_arm() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "platform_machine == 'arm64'",
@@ -37380,6 +37864,7 @@ fn lock_arm() -> Result<()> {
             { url = "https://files.pythonhosted.org/packages/75/5b/ca6c8bd14007e5ca171c7c03102d17b4f4e0ceb53957e8c44343a9546dcc/numpy-1.26.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:03a8c78d01d9781b28a6989f6fa1bb2c4f2d51201cf99d3dd875df6fbd96b23b", size = 13685868, upload-time = "2024-02-05T23:55:56.28Z" },
             { url = "https://files.pythonhosted.org/packages/79/f8/97f10e6755e2a7d027ca783f63044d5b1bc1ae7acb12afe6a9b4286eac17/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9fad7dcb1aac3c7f0584a5a8133e3a43eeb2fe127f47e3632d43d677c66c102b", size = 13925109, upload-time = "2024-02-05T23:56:20.368Z" },
             { url = "https://files.pythonhosted.org/packages/4c/0c/9c603826b6465e82591e05ca230dfc13376da512b25ccd0894709b054ed0/numpy-1.26.4-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:ab47dbe5cc8210f55aa58e4805fe224dac469cde56b9f731a4c098b91917159a", size = 13572172, upload-time = "2024-02-05T23:57:21.56Z" },
+            { url = "https://files.pythonhosted.org/packages/16/2e/86f24451c2d530c88daf997cb8d6ac622c1d40d19f5a031ed68a4b73a374/numpy-1.26.4-cp312-cp312-win_amd64.whl", hash = "sha256:08beddf13648eb95f8d867350f6a018a4be2e5ad54c8d8caed89ebca558b2818", size = 15517754, upload-time = "2024-02-05T23:58:36.364Z" },
         ]
 
         [[package]]
@@ -37432,7 +37917,7 @@ fn lock_x86_64() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "platform_machine == 'x86_64'",
@@ -37506,7 +37991,7 @@ fn lock_x86() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "platform_machine == 'i686'",
@@ -37576,7 +38061,7 @@ fn lock_script() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -37707,7 +38192,7 @@ fn lock_script_path() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -37841,7 +38326,7 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
             lock,
             @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -37906,7 +38391,11 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
-        "expected `uv lock --script script.py --locked` to fail after editable dependency changes, but it succeeded\n{stderr}"
+        indoc! {"
+            expected `uv lock --script script.py --locked` to fail after editable dependency changes, but it succeeded
+            {}"
+        },
+        stderr
     );
     assert!(stderr.contains("needs to be updated"), "{stderr}");
 
@@ -37925,7 +38414,7 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
             lock,
             @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
 
         [options]
@@ -37992,7 +38481,7 @@ fn lock_script_initialize() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -38098,7 +38587,7 @@ fn lock_pytorch_cpu() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12.[X]"
         resolution-markers = [
             "(python_full_version >= '3.13' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')",
@@ -38447,16 +38936,16 @@ fn lock_pytorch_cpu() -> Result<()> {
 
         [package.optional-dependencies]
         cpu = [
-            { name = "torch", version = "2.5.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version >= '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu') or (sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
-            { name = "torch", version = "2.5.1+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version < '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
-            { name = "torchvision", version = "0.20.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version >= '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu') or (sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
-            { name = "torchvision", version = "0.20.1+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version < '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torch", version = "2.5.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torch", version = "2.5.1+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torchvision", version = "0.20.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torchvision", version = "0.20.1+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
         ]
         cu124 = [
-            { name = "torch", version = "2.5.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cu124') or (python_full_version >= '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
-            { name = "torch", version = "2.5.1+cu124", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version >= '3.13' and extra == 'extra-7-project-cu124') or (python_full_version < '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cu124')" },
-            { name = "torchvision", version = "0.20.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cu124') or (python_full_version >= '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
-            { name = "torchvision", version = "0.20.1+cu124", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version >= '3.13' and extra == 'extra-7-project-cu124') or (python_full_version < '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cu124')" },
+            { name = "torch", version = "2.5.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cu124') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torch", version = "2.5.1+cu124", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version >= '3.13' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cu124') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torchvision", version = "0.20.1", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cu124') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
+            { name = "torchvision", version = "0.20.1+cu124", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cu124" }, marker = "(python_full_version >= '3.13' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra == 'extra-7-project-cu124') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')" },
         ]
 
         [package.metadata]
@@ -38749,7 +39238,7 @@ fn lock_pytorch_index_preferences() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.10.0"
         resolution-markers = [
             "sys_platform != 'darwin' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu118'",
@@ -39001,9 +39490,9 @@ fn lock_pytorch_index_preferences() -> Result<()> {
 
         [package.optional-dependencies]
         cpu = [
-            { name = "torch", version = "2.2.2", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version >= '3.13' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118') or (platform_machine != 'aarch64' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118') or (platform_python_implementation != 'CPython' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118') or (sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
+            { name = "torch", version = "2.2.2", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
             { name = "torch", version = "2.2.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
-            { name = "torch", version = "2.2.2+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (python_full_version < '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
+            { name = "torch", version = "2.2.2+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
         ]
         cu118 = [
             { name = "torch", version = "2.2.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-project-cu118') or (extra == 'extra-7-project-cpu' and extra == 'extra-7-project-cu118')" },
@@ -39214,7 +39703,7 @@ fn lock_intel_mac() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.11"
         resolution-markers = [
             "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform == 'linux') or (python_full_version >= '3.12' and sys_platform == 'win32')",
@@ -39603,7 +40092,7 @@ fn lock_pytorch_local_preference() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12.[X]"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -39936,7 +40425,7 @@ fn windows_arm() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.12.*"
         resolution-markers = [
             "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -40011,7 +40500,7 @@ fn windows_amd64_required() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.12.*"
         required-markers = [
             "platform_machine == 'x86' and sys_platform == 'win32'",
@@ -40083,7 +40572,7 @@ fn windows_arm64_required() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.12.*"
         required-markers = [
             "platform_machine == 'ARM64' and sys_platform == 'win32'",
@@ -40149,7 +40638,7 @@ fn lock_empty_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -40248,7 +40737,7 @@ fn lock_empty_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -40359,7 +40848,7 @@ fn lock_invalid_fork_markers() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Resolving despite existing lockfile due to fork markers not covering the supported environments: `(python_full_version >= '3.8' and python_full_version < '3.10') or (python_full_version >= '3.8' and platform_python_implementation == 'CPython')` vs `python_full_version >= '3.8'`
+    warning: Resolving despite existing lockfile due to fork markers not covering the supported environments: `(python_full_version >= '3.8' and python_full_version < '3.10') or (python_full_version >= '3.10' and platform_python_implementation == 'CPython')` vs `python_full_version >= '3.8'`
     Resolved 2 packages in [TIME]
     Updated idna v3.10 -> v3.6
     ");
@@ -40404,7 +40893,7 @@ fn lock_omit_wheels_exclude_newer() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -40461,7 +40950,7 @@ fn lock_omit_wheels_exclude_newer() -> Result<()> {
 #[test]
 fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
     // The cutoff falls between the 2024-03-25 and 2024-03-27 uploads.
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "post-cutoff-attached-artifacts"
 
         [root]
@@ -40477,7 +40966,6 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
         sdist = { upload_time = "2024-03-27T00:00:00Z" }
         wheel = { upload_time = "2024-03-25T00:00:00Z" }
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
         .with_exclude_newer("2024-03-26T00:00:00Z")
         .with_filters(
@@ -40508,7 +40996,7 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -40618,10 +41106,10 @@ fn lock_conflict_for_disjoint_python_version() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
 #[test]
 fn lock_requires_python_empty_lock_file() -> Result<()> {
-    // N.B. These versions were selected based on what was
-    // in `.python-versions` at the time of writing (2025-06-16).
-    let (v1, v2) = ("3.13.0", "3.13.2");
-    let context = uv_test::test_context_with_versions!(&[v1, v2]);
+    // Use two patch versions from `.python-versions` to exercise disjoint requirements.
+    let (v1, v2) = ("3.13.0", LATEST_PYTHON_3_13);
+    let context =
+        uv_test::test_context_with_versions!(&[v1, v2]).with_filtered_latest_python_versions();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -40648,7 +41136,7 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = "==3.13.0"
         resolution-markers = [
             "sys_platform == 'darwin'",
@@ -40709,8 +41197,8 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package=python"), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.13.2 interpreter at: [PYTHON-3.13.2]
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version == '3.13.0'` vs `python_full_version == '3.13.2'`
+    Using CPython 3.13.[LATEST] interpreter at: [PYTHON-3.13.[LATEST]]
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version == '3.13.0'` vs `python_full_version == '3.13.[LATEST]'`
     Resolved 3 packages in [TIME]
     ");
 
@@ -40721,8 +41209,8 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
-        requires-python = "==3.13.2"
+        revision = 5
+        requires-python = "==3.13.[LATEST]"
         resolution-markers = [
             "sys_platform == 'darwin'",
             "platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -40896,7 +41384,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Resu
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -41264,7 +41752,7 @@ fn lock_trailing_slash_find_links() -> Result<()> {
             assert_snapshot!(
                 lock, @r#"
             version = 1
-            revision = 3
+            revision = 5
             requires-python = ">=3.12"
 
             [options]
@@ -41338,7 +41826,7 @@ fn lock_trailing_slash_find_links() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -41460,7 +41948,7 @@ fn lock_exclude_newer_disable_cli() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [[package]]
@@ -41506,7 +41994,7 @@ fn lock_exclude_newer_disable_environment() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [[package]]
@@ -41552,7 +42040,7 @@ fn lock_exclude_newer_disable_config() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [[package]]
@@ -41603,7 +42091,7 @@ fn lock_exclude_newer_package_disable() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -41686,7 +42174,7 @@ fn lock_exclude_newer_package_order() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -41736,7 +42224,7 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -41850,7 +42338,7 @@ fn lock_exclude_newer_package_absent_preview() -> Result<()> {
     }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [[package]]
@@ -41924,7 +42412,7 @@ fn lock_exclude_newer_package() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -42098,8 +42586,8 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    warning: iniconfig-2.0.0.tar.gz is missing an upload date, but user provided: 2024-03-25T00:00:00Z
-    warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2024-03-25T00:00:00Z
+    warning: `iniconfig-2.0.0.tar.gz` is missing an upload date, but user provided: 2024-03-25T00:00:00Z
+    warning: `iniconfig-2.0.0-py3-none-any.whl` is missing an upload date, but user provided: 2024-03-25T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
 
@@ -42177,8 +42665,8 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
-    warning: iniconfig-2.0.0.tar.gz is missing an upload date, but user provided: 2025-01-01T00:00:00Z
-    warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
+    warning: `iniconfig-2.0.0.tar.gz` is missing an upload date, but user provided: 2025-01-01T00:00:00Z
+    warning: `iniconfig-2.0.0-py3-none-any.whl` is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
 
@@ -42191,8 +42679,8 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
         .arg("index-exclude-newer"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    warning: iniconfig-2.0.0.tar.gz is missing an upload date, but user provided: 2025-01-01T00:00:00Z
-    warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
+    warning: `iniconfig-2.0.0.tar.gz` is missing an upload date, but user provided: 2025-01-01T00:00:00Z
+    warning: `iniconfig-2.0.0-py3-none-any.whl` is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
 
@@ -42375,7 +42863,7 @@ async fn lock_path_dependency_explicit_index() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = lock_without_package_metadata(&fs_err::read_to_string(pkg_b.join("uv.lock"))?)?;
+    let lock = lock_without_package_metadata(&context.read("pkg_b/uv.lock"))?;
     fs_err::write(pkg_b.join("uv.lock"), lock.to_string())?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -42881,7 +43369,7 @@ fn lock_android() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'android'",
@@ -42935,6 +43423,79 @@ fn lock_android() -> Result<()> {
     Ok(())
 }
 
+/// Android wheels satisfy an Android environment when the package has no source distribution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_android_no_sdist() -> Result<()> {
+    let server = PackseServer::new("wheels/android-no-sdist.toml");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-06-01T00:00:00Z");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [tool.uv]
+        environments = ["sys_platform == 'android'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'android'",
+        ]
+        supported-markers = [
+            "sys_platform == 'android'",
+        ]
+
+        [options]
+        exclude-newer = "2025-06-01T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_24_arm64_v8a.whl", hash = "sha256:0ca4362b6fd0e0c4044748dadb03809fa79d45c6da46d3954342ee8713d8b304", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_24_x86_64.whl", hash = "sha256:71fe9d1ad3501930e6b78d222dace8d8e007e5a8e506702080549f4b5d711d12", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#
+        );
+    });
+
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_intersection() -> Result<()> {
@@ -42973,7 +43534,7 @@ fn lock_required_intersection() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -43184,7 +43745,7 @@ fn lock_refresh() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -43317,7 +43878,7 @@ fn lock_refresh_deindents_lockfile() -> Result<()> {
     ");
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.12"
 
     [options]
@@ -43523,7 +44084,7 @@ fn lock_unsupported_wheel_url_required_platform() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_python_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-python-fork"
 
         [root]
@@ -43539,7 +44100,6 @@ fn lock_required_environment_python_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-win_amd64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -43569,7 +44129,7 @@ fn lock_required_environment_python_fork() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version >= '3.13' and sys_platform == 'win32'",
@@ -43633,7 +44193,7 @@ fn lock_required_environment_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_macos_release() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-macos-release"
 
         [root]
@@ -43649,7 +44209,6 @@ fn lock_required_environment_macos_release() -> Result<()> {
         sdist = false
         wheel_tags = ["py3-none-macosx_26_0_arm64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -43680,7 +44239,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
@@ -43772,7 +44331,7 @@ fn lock_required_environment_macos_release() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_macos_release_python_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-macos-release-python-fork"
 
         [root]
@@ -43788,7 +44347,6 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["cp312-cp312-macosx_14_0_arm64", "cp313-cp313-macosx_26_0_arm64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -43821,7 +44379,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version >= '3.13' and platform_machine == 'arm64' and platform_release >= '25' and sys_platform == 'darwin'",
@@ -43891,7 +44449,7 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_generic_python_wheel() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-generic-python-wheel"
 
         [root]
@@ -43903,7 +44461,6 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
         sdist = false
         wheel_tags = ["py310-none-any"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = indoc! {r#"
         [project]
@@ -43951,7 +44508,7 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_wheel_url_fork() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "required-environment-wheel-url-fork"
 
         [root]
@@ -43963,7 +44520,6 @@ fn lock_required_environment_wheel_url_fork() -> Result<()> {
         sdist = false
         wheel_tags = ["py3-none-manylinux_2_17_aarch64.macosx_11_0_x86_64"]
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -44189,7 +44745,7 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(project.join("uv.lock"))?;
+    let lock = context.read("project/uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
@@ -44197,7 +44753,7 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -44283,7 +44839,7 @@ async fn lock_check_multiple_default_indexes_explicit_assignment_dependency_grou
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pyproject.toml`
+    error: Failed to parse: pyproject.toml
       cause: TOML parse error at line 13, column 9
                 |
              13 |         [[tool.uv.index]]
@@ -44649,7 +45205,7 @@ fn lock_frozen_warning() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_version_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-version-constraints"
 
         [root]
@@ -44667,7 +45223,6 @@ fn lock_resolution_inputs_version_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -44701,7 +45256,7 @@ fn lock_resolution_inputs_version_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -44985,7 +45540,7 @@ fn lock_resolution_inputs_individual_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -45125,7 +45680,7 @@ fn lock_resolution_inputs_individual_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_extra_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-extra-constraints"
 
         [root]
@@ -45145,7 +45700,6 @@ fn lock_resolution_inputs_extra_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -45213,7 +45767,7 @@ fn lock_resolution_inputs_extra_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-recursive-extra-constraints"
 
         [root]
@@ -45234,7 +45788,6 @@ fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -45334,7 +45887,7 @@ fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(retained_lock, @r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -45407,7 +45960,7 @@ fn lock_resolution_inputs_recursive_extra_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_constraint_markers() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-constraint-markers"
 
         [root]
@@ -45425,7 +45978,6 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -45462,7 +46014,7 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'linux'",
@@ -45547,7 +46099,7 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'linux'",
@@ -45734,7 +46286,7 @@ fn lock_resolution_inputs_constraint_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_source_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-source-constraints"
 
         [root]
@@ -45752,7 +46304,6 @@ fn lock_resolution_inputs_source_constraints() -> Result<()> {
         [packages.b.versions."2.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -45785,7 +46336,7 @@ fn lock_resolution_inputs_source_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -45948,7 +46499,7 @@ fn lock_resolution_inputs_source_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-prerelease-constraints"
 
         [root]
@@ -45966,7 +46517,6 @@ fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
         [packages.b.versions."1.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -46000,7 +46550,7 @@ fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46143,7 +46693,7 @@ fn lock_resolution_inputs_prerelease_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_local_source_constraints() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-local-prerelease"
 
         [root]
@@ -46154,20 +46704,13 @@ fn lock_resolution_inputs_local_source_constraints() -> Result<()> {
         [packages.b.versions."1.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel_with_files(
-        &"provider".parse()?,
-        &"1.0.0".parse()?,
-        &["b==1.0.0a1".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"provider".parse()?, &"1.0.0".parse()?)
+        .requires(&["b==1.0.0a1".parse()?])
+        .build();
     context.temp_dir.child(&filename).write_binary(&wheel)?;
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let source = Url::from_file_path(context.temp_dir.child(&filename).path())
+    let source = SafeUrl::from_file_path(context.temp_dir.child(&filename).path())
         .map_err(|()| anyhow!("invalid wheel path"))?;
 
     // The constrained local wheel requires a prerelease from the registry.
@@ -46239,7 +46782,7 @@ fn lock_resolution_inputs_local_source_constraints() -> Result<()> {
 fn lock_resolution_inputs_dynamic_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let provider_url = Url::from_directory_path(context.temp_dir.child("provider").path())
+    let provider_url = SafeUrl::from_directory_path(context.temp_dir.child("provider").path())
         .map_err(|()| anyhow!("invalid provider directory"))?;
 
     // Select a local package whose backend provides its version.
@@ -46302,7 +46845,7 @@ fn lock_resolution_inputs_dynamic_constraints() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 4
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46426,7 +46969,7 @@ fn lock_resolution_inputs_prune_unused_inputs() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46516,7 +47059,7 @@ fn lock_resolution_inputs_prune_unused_inputs() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_shadowed_override() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-shadowed-override"
         [root]
         [expected]
@@ -46524,7 +47067,6 @@ fn lock_resolution_inputs_shadowed_override() -> Result<()> {
         [packages.child.versions."1.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
 
     let pyproject = context.temp_dir.child("pyproject.toml");
@@ -46615,7 +47157,7 @@ fn lock_resolution_inputs_new_exclusion() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46670,7 +47212,7 @@ fn lock_resolution_inputs_new_exclusion() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_empty_scopes() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-empty-scopes"
         [root]
         [expected]
@@ -46678,7 +47220,6 @@ fn lock_resolution_inputs_empty_scopes() -> Result<()> {
         [packages.child.versions."1.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -46712,7 +47253,7 @@ fn lock_resolution_inputs_empty_scopes() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46892,7 +47433,7 @@ fn lock_resolution_inputs_ignores_build_dependency_metadata() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -46963,7 +47504,7 @@ fn lock_resolution_inputs_metadata_declarations() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -47209,7 +47750,7 @@ fn lock_resolution_inputs_candidate_policy_override() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-refresh-new-exclusion"
 
         [root]
@@ -47222,7 +47763,6 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
         [packages.child.versions."2.0.0rc1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(indoc! {r#"
@@ -47291,7 +47831,7 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_backtracking() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-backtracking"
 
         [root]
@@ -47312,7 +47852,6 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
         [packages.leaf.versions."1.0.0"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -47355,7 +47894,7 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -47731,7 +48270,7 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -47811,7 +48350,7 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "prerelease-constraint-policy"
 
         [root]
@@ -47829,7 +48368,6 @@ fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
         [packages.b.versions."2.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -47865,7 +48403,7 @@ fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -47959,7 +48497,7 @@ fn lock_resolution_inputs_if_necessary_prerelease_constraint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+    let server = PackseServer::from_toml(indoc! {r#"
         name = "resolution-inputs-package-prerelease"
 
         [root]
@@ -47977,7 +48515,6 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
         [packages.b.versions."2.0.0a1"]
         sdist = false
     "#})?;
-    let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12").with_filters(
         server
             .files()
@@ -48013,7 +48550,7 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
@@ -48138,7 +48675,7 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]

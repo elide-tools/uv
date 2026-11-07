@@ -1,9 +1,7 @@
-use std::str::FromStr;
-
 use rustc_hash::{FxHashMap, FxHashSet};
-use serde::de::Error;
 
 use uv_distribution_types::ResolutionRecorder;
+use uv_macros::DeserializeUntagged;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 
@@ -42,28 +40,14 @@ impl PackageExclusion {
 }
 
 /// An exclusion, either global or scoped to a specific package version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, DeserializeUntagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(untagged))]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a string or map")]
 pub enum ExcludeDependency {
+    #[untagged(map)]
     Package(PackageExclusion),
+    #[untagged(string)]
     Dependency(PackageName),
-}
-
-impl<'de> serde::Deserialize<'de> for ExcludeDependency {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        serde_untagged::UntaggedEnumVisitor::new()
-            .string(|string| {
-                PackageName::from_str(string)
-                    .map(Self::Dependency)
-                    .map_err(Error::custom)
-            })
-            .map(|map| map.deserialize().map(Self::Package))
-            .deserialize(deserializer)
-    }
 }
 
 /// A set of packages to exclude from resolution.

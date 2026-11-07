@@ -11,6 +11,13 @@
 # [tool.uv]
 # no-build = true
 # exclude-newer = "P7D"
+#
+# [tool.uv.exclude-newer-package]
+# # Override the seven-day cutoff to allow sigstore 4.5.1, recommended by
+# # Python's security announcement in response to the eMudhra incident.
+# # Remove this cutoff once 4.5.1 is seven days old, so later sigstore
+# # releases can be selected after the seven-day wait.
+# sigstore = "2026-10-20T15:12:51Z"
 # ///
 
 """Test `uv publish`.
@@ -111,7 +118,7 @@ requires-python = ">=3.12"
 urls = { "github" = "https://github.com/astral-sh/uv" }
 
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
+requires = ["uv_build>=0.12,<0.14"]
 build-backend = "uv_build"
 """.lstrip()
 
@@ -203,8 +210,8 @@ TARGETS: dict[str, Target] = {
     ),
     "cloudsmith": Target(
         "astral-test-token",
-        "https://python.cloudsmith.io/astral-test/astral-test-1/",
-        "https://dl.cloudsmith.io/public/astral-test/astral-test-1/python/simple/",
+        "https://python.cloudsmith.io/astral-test/astral-test-2/",
+        "https://dl.cloudsmith.io/public/astral-test/astral-test-2/python/simple/",
         secrets=(("UV_PUBLISH_TOKEN", "UV_TEST_PUBLISH_CLOUDSMITH_TOKEN"),),
     ),
     "pypi-trusted-publishing-github": Target(

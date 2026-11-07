@@ -1,12 +1,12 @@
 //! Avoid cyclic crate dependencies between [resolver][`uv_resolver`],
-//! [installer][`uv_installer`] and [build][`uv_build`] through [`BuildDispatch`]
+//! [installer][`uv_installer`] and [build frontend][`uv_build_frontend`] through [`BuildDispatch`]
 //! implementing [`BuildContext`].
 
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 #[cfg(feature = "source-build")]
 use futures::FutureExt;
 use itertools::Itertools;
@@ -17,16 +17,19 @@ use tracing::trace;
 use tracing::{debug, instrument};
 
 #[cfg(feature = "source-build")]
-use uv_build_backend::check_direct_build;
+use uv_build_backend::{Error as BuildBackendError, check_direct_build};
 // When `source-build` is off, `uv_build_frontend` resolves to the local stub
 // module below instead of the (absent) crate, so every `uv_build_frontend::…`
 // path and `BuildArena<SourceBuild>` keeps compiling unchanged; only the build
-// *bodies* are gated.
+// bodies are gated.
+#[cfg(not(feature = "source-build"))]
+use uv_build_frontend::Error as BuildBackendError;
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
-    BuildKind, BuildOptions, Constraints, DependencyModifiers, IndexStrategy, NoSources, Reinstall,
+    BuildKind, BuildOptions, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
+    NoSources, Reinstall,
 };
 use uv_configuration::{BuildOutput, Concurrency};
 use uv_distribution::DistributionDatabase;
@@ -42,15 +45,16 @@ use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
-use uv_python::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::LookaheadResolver;
 use uv_resolver::{
     ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder,
     PythonRequirement, Resolver, ResolverEnvironment,
 };
+use uv_static::TarBackend;
 use uv_types::{
     AnyErrorBuild, BuildArena, BuildContext, BuildIsolation, BuildStack, EmptyInstalledPackages,
-    HashStrategy, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
+    HashStrategy, HashVerification, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
 };
 use uv_workspace::WorkspaceCache;
 
@@ -121,10 +125,23 @@ pub enum BuildDispatchError {
     BuildFrontend(#[from] AnyErrorBuild),
 
     #[error(transparent)]
+    BuildBackend(#[from] BuildBackendError),
+
+    #[error(transparent)]
     Tags(#[from] uv_platform_tags::TagsError),
 
     #[error(transparent)]
     Resolve(#[from] uv_resolver::ResolveError),
+
+    #[error(
+        "No solution found when resolving: {}",
+        requirements.iter().format_with(", ", |requirement, f| f(&format_args!("`{requirement}`")))
+    )]
+    ResolveRequirements {
+        requirements: Vec<Requirement>,
+        #[source]
+        source: uv_resolver::ResolveError,
+    },
 
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
@@ -135,6 +152,15 @@ pub enum BuildDispatchError {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error("Failed to uninstall build dependencies")]
+    UninstallBuildDependencies(#[source] uv_installer::UninstallError),
+
+    #[error("Failed to install build dependencies")]
+    InstallBuildDependencies(#[source] uv_installer::InstallError),
+
+    #[error(transparent)]
+    Plan(#[from] uv_installer::PlanError),
+
     #[error(transparent)]
     Lookahead(#[from] uv_requirements::Error),
 }
@@ -143,21 +169,16 @@ impl uv_errors::Hinted for BuildDispatchError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::BuildFrontend(err) => err.hints(),
-            Self::Resolve(err) => err.hints(),
-            Self::Anyhow(err) => {
-                // Walk the anyhow error chain to find hint-bearing errors
-                // (e.g., ResolveError wrapped via `with_context`).
-                for cause in err.chain() {
-                    if let Some(resolve_err) = cause.downcast_ref::<uv_resolver::ResolveError>() {
-                        let hints = resolve_err.hints();
-                        if !hints.is_empty() {
-                            return hints;
-                        }
-                    }
-                }
-                uv_errors::Hints::none()
-            }
-            _ => uv_errors::Hints::none(),
+            Self::Plan(error) => error.hints(),
+            Self::Resolve(err) | Self::ResolveRequirements { source: err, .. } => err.hints(),
+            Self::BuildBackend(_)
+            | Self::Tags(_)
+            | Self::Join(_)
+            | Self::Anyhow(_)
+            | Self::Prepare(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
+            | Self::Lookahead(_) => uv_errors::Hints::none(),
         }
     }
 }
@@ -166,24 +187,33 @@ impl IsBuildBackendError for BuildDispatchError {
     fn is_user_failure(&self) -> bool {
         match self {
             Self::BuildFrontend(error) => error.is_user_failure(),
-            Self::Resolve(error) => error.is_user_failure(),
+            Self::Resolve(error) | Self::ResolveRequirements { source: error, .. } => {
+                error.is_user_failure()
+            }
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
-            Self::Anyhow(error) => error
-                .chain()
-                .find_map(|cause| cause.downcast_ref::<uv_resolver::ResolveError>())
-                .is_some_and(uv_resolver::ResolveError::is_user_failure),
-            Self::Tags(_) | Self::Join(_) => false,
+            Self::BuildBackend(_)
+            | Self::Tags(_)
+            | Self::Join(_)
+            | Self::Anyhow(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
+            | Self::Plan(_) => false,
         }
     }
 
     fn is_build_backend_error(&self) -> bool {
         match self {
-            Self::Tags(_)
+            Self::BuildBackend(_)
+            | Self::Tags(_)
             | Self::Resolve(_)
+            | Self::ResolveRequirements { .. }
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
+            | Self::Plan(_)
             | Self::Lookahead(_) => false,
             Self::BuildFrontend(err) => err.is_build_backend_error(),
         }
@@ -210,7 +240,8 @@ pub struct BuildDispatch<'a> {
     build_options: &'a BuildOptions,
     config_settings: &'a ConfigSettings,
     config_settings_package: &'a PackageConfigSettings,
-    hasher: &'a HashStrategy,
+    base_hasher: &'a HashStrategy,
+    build_hash_checking: HashCheckingMode,
     exclude_newer: ExcludeNewer,
     #[cfg_attr(not(feature = "source-build"), allow(dead_code))]
     source_build_context: SourceBuildContext,
@@ -220,9 +251,12 @@ pub struct BuildDispatch<'a> {
     workspace_cache: WorkspaceCache,
     concurrency: Concurrency,
     preview: Preview,
+    tar_backend: TarBackend,
 }
 
 impl<'a> BuildDispatch<'a> {
+    // TODO(charlie): Review call sites and consider if we want to make some of the parameters
+    // optional.
     pub fn new(
         client: &'a RegistryClient,
         cache: &'a Cache,
@@ -265,7 +299,13 @@ impl<'a> BuildDispatch<'a> {
             extra_build_variables,
             link_mode,
             build_options,
-            hasher,
+            base_hasher: hasher,
+            build_hash_checking: match hasher.verification() {
+                HashVerification::Required(_) => HashCheckingMode::Require,
+                HashVerification::Unspecified | HashVerification::IfPresent(_) => {
+                    HashCheckingMode::Verify
+                }
+            },
             exclude_newer,
             source_build_context: SourceBuildContext::new(concurrency.builds_semaphore.clone()),
             build_extra_env_vars: FxHashMap::default(),
@@ -274,6 +314,7 @@ impl<'a> BuildDispatch<'a> {
             workspace_cache,
             concurrency,
             preview,
+            tar_backend: TarBackend::from_env(),
         }
     }
 
@@ -284,7 +325,7 @@ impl<'a> BuildDispatch<'a> {
     #[must_use]
     pub fn fork<'fork>(&'fork self, hasher: &'fork HashStrategy) -> BuildDispatch<'fork> {
         BuildDispatch {
-            hasher,
+            base_hasher: hasher,
             shared_state: SharedState {
                 build_arena: BuildArena::default(),
                 ..self.shared_state.fork()
@@ -310,11 +351,28 @@ impl<'a> BuildDispatch<'a> {
             .collect();
         self
     }
+
+    /// Set the hash-checking mode for build dependencies.
+    ///
+    /// When hashes are required, hashes from backend-generated requirements are not trusted.
+    #[must_use]
+    pub fn with_build_hash_checking(mut self, mode: HashCheckingMode) -> Self {
+        self.build_hash_checking = mode;
+        self
+    }
+
+    fn require_build_hashes(&self) -> bool {
+        self.build_hash_checking.is_require()
+    }
 }
 
 #[allow(refining_impl_trait)]
 impl BuildContext for BuildDispatch<'_> {
     type SourceDistBuilder = SourceBuild;
+
+    fn tar_backend(&self) -> TarBackend {
+        self.tar_backend
+    }
 
     fn interpreter(&self) -> impl Future<Output = &Interpreter> + '_ {
         future::ready(self.interpreter)
@@ -383,6 +441,7 @@ impl BuildContext for BuildDispatch<'_> {
     async fn resolve<'data>(
         &'data self,
         requirements: &'data [Requirement],
+        hash_override: Option<&'data HashStrategy>,
         build_stack: &'data BuildStack,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
         let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
@@ -390,16 +449,26 @@ impl BuildContext for BuildDispatch<'_> {
         let resolver_env = ResolverEnvironment::specific(marker_env);
         let tags = self.interpreter.tags()?;
 
+        let active_requirements = requirements.iter().filter(|requirement| {
+            requirement.evaluate_markers(Some(self.interpreter.markers()), &[])
+        });
+        let previous_hasher = hash_override;
+        let hasher = match previous_hasher {
+            Some(hasher) if self.require_build_hashes() => hasher
+                .clone()
+                .augment_with_metadata_requirements(active_requirements),
+            previous_hasher => previous_hasher
+                .unwrap_or(self.base_hasher)
+                .clone()
+                .augment_with_requirements(active_requirements),
+        }
+        .map_err(uv_requirements::Error::from)?;
+
         // Walk any URL requirements transitively so their sub-URLs (for example, a workspace
         // member that depends on another workspace member) are known before the resolver runs
         // its URL allow-list check. This mirrors what the project resolver does in
         // `uv_requirements::LookaheadResolver` and prevents a `DisallowedUrl` error when one
         // `build-system.requires` entry pulls in another URL dependency.
-        let hasher = self
-            .hasher
-            .clone()
-            .augment_with_requirements(requirements.iter())
-            .map_err(uv_requirements::Error::from)?;
         let modifiers = DependencyModifiers::default();
         let (lookaheads, hasher) = LookaheadResolver::new(
             requirements,
@@ -447,14 +516,11 @@ impl BuildContext for BuildDispatch<'_> {
             )
             .with_build_stack(build_stack),
         )?;
-        let resolution = Resolution::from(resolver.resolve().await.with_context(|| {
-            format!(
-                "No solution found when resolving: {}",
-                requirements
-                    .iter()
-                    .map(|requirement| format!("`{requirement}`"))
-                    .join(", ")
-            )
+        let resolution = Resolution::from(resolver.resolve().await.map_err(|source| {
+            BuildDispatchError::ResolveRequirements {
+                requirements: requirements.to_vec(),
+                source,
+            }
         })?);
         Ok(ResolvedRequirements::new(resolution, hasher))
     }
@@ -476,11 +542,11 @@ impl BuildContext for BuildDispatch<'_> {
         let hasher = requirements.hasher();
 
         debug!(
-            "Installing in {} in {}",
+            "Installing `{}` in `{}`",
             resolution
                 .distributions()
                 .map(ToString::to_string)
-                .join(", "),
+                .join("`, `"),
             venv.root().display(),
         );
 
@@ -563,7 +629,7 @@ impl BuildContext for BuildDispatch<'_> {
             for dist_info in &reinstalls {
                 let summary = uv_installer::uninstall(dist_info, &layout)
                     .await
-                    .context("Failed to uninstall build dependencies")?;
+                    .map_err(BuildDispatchError::UninstallBuildDependencies)?;
                 debug!(
                     "Uninstalled {} ({} file{}, {} director{})",
                     dist_info.name(),
@@ -588,12 +654,30 @@ impl BuildContext for BuildDispatch<'_> {
                 .with_cache(self.cache)
                 .install(wheels)
                 .await
-                .context("Failed to install build dependencies")?;
+                .map_err(BuildDispatchError::InstallBuildDependencies)?;
         }
 
         Ok(wheels)
     }
 
+    #[cfg(not(feature = "source-build"))]
+    async fn setup_build<'data>(
+        &'data self,
+        _source: &'data Path,
+        _subdirectory: Option<&'data Path>,
+        _install_path: &'data Path,
+        _stop_discovery_at: Option<&'data Path>,
+        _version_id: Option<&'data str>,
+        _dist: Option<&'data SourceDist>,
+        _sources: &'data NoSources,
+        _build_kind: BuildKind,
+        _build_output: BuildOutput,
+        _build_stack: BuildStack,
+    ) -> Result<SourceBuild, uv_build_frontend::Error> {
+        Err(uv_build_frontend::Error::NoSourceDistBuilds)
+    }
+
+    #[cfg(feature = "source-build")]
     #[instrument(skip_all, fields(version_id = version_id, subdirectory = ?subdirectory))]
     async fn setup_build<'data>(
         &'data self,
@@ -606,91 +690,86 @@ impl BuildContext for BuildDispatch<'_> {
         sources: &'data NoSources,
         build_kind: BuildKind,
         build_output: BuildOutput,
-        #[cfg_attr(not(feature = "source-build"), allow(unused_mut))] mut build_stack: BuildStack,
+        mut build_stack: BuildStack,
     ) -> Result<SourceBuild, uv_build_frontend::Error> {
-        #[cfg(not(feature = "source-build"))]
-        {
-            let _ = (
-                &source,
-                &subdirectory,
-                &install_path,
-                &stop_discovery_at,
-                &version_id,
-                &dist,
-                &sources,
-                &build_kind,
-                &build_output,
-                &build_stack,
-            );
-            return Err(uv_build_frontend::Error::NoSourceDistBuilds);
+        let dist_name = dist.map(uv_distribution_types::Name::name);
+        let dist_version = dist
+            .map(uv_distribution_types::DistributionMetadata::version_or_url)
+            .and_then(|version| match version {
+                VersionOrUrlRef::Version(version) => Some(version),
+                VersionOrUrlRef::Url(_) => None,
+            });
+
+        // Push the current distribution onto the build stack, to prevent cyclic dependencies.
+        if let Some(dist) = dist {
+            build_stack.insert(dist.distribution_id());
         }
-        #[cfg(feature = "source-build")]
-        {
-            let dist_name = dist.map(uv_distribution_types::Name::name);
-            let dist_version = dist
-                .map(uv_distribution_types::DistributionMetadata::version_or_url)
-                .and_then(|version| match version {
-                    VersionOrUrlRef::Version(version) => Some(version),
-                    VersionOrUrlRef::Url(_) => None,
-                });
 
-            // Push the current distribution onto the build stack, to prevent cyclic dependencies.
-            if let Some(dist) = dist {
-                build_stack.insert(dist.distribution_id());
-            }
-
-            // Get package-specific config settings if available; otherwise, use global settings.
-            let config_settings = if let Some(name) = dist_name {
-                if let Some(package_settings) = self.config_settings_package.get(name) {
-                    package_settings.clone().merge(self.config_settings.clone())
-                } else {
-                    self.config_settings.clone()
-                }
+        // Get package-specific config settings if available; otherwise, use global settings.
+        let config_settings = if let Some(name) = dist_name {
+            if let Some(package_settings) = self.config_settings_package.get(name) {
+                package_settings.clone().merge(self.config_settings.clone())
             } else {
                 self.config_settings.clone()
-            };
-
-            // Get package-specific environment variables if available.
-            let mut environment_variables = self.build_extra_env_vars.clone();
-            if let Some(name) = dist_name {
-                if let Some(package_vars) = self.extra_build_variables.get(name) {
-                    environment_variables.extend(
-                        package_vars
-                            .iter()
-                            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-                    );
-                }
             }
+        } else {
+            self.config_settings.clone()
+        };
 
-            let builder = SourceBuild::setup(
-                source,
-                subdirectory,
-                install_path,
-                stop_discovery_at,
-                dist_name,
-                dist_version,
-                self.interpreter,
-                self,
-                self.source_build_context.clone(),
-                version_id,
-                self.index_locations,
-                sources.clone(),
-                self.workspace_cache(),
-                config_settings,
-                self.build_isolation,
-                self.extra_build_requires,
-                &build_stack,
-                build_kind,
-                environment_variables,
-                build_output,
-                self.client.credentials_cache(),
-            )
-            .boxed_local()
-            .await?;
-            Ok(builder)
+        // Get package-specific environment variables if available.
+        let mut environment_variables = self.build_extra_env_vars.clone();
+        if let Some(name) = dist_name {
+            if let Some(package_vars) = self.extra_build_variables.get(name) {
+                environment_variables.extend(
+                    package_vars
+                        .iter()
+                        .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+                );
+            }
         }
+
+        let builder = SourceBuild::setup(
+            source,
+            subdirectory,
+            install_path,
+            stop_discovery_at,
+            dist_name,
+            dist_version,
+            self.interpreter,
+            self,
+            self.source_build_context.clone(),
+            version_id,
+            self.index_locations,
+            sources.clone(),
+            self.workspace_cache(),
+            config_settings,
+            self.build_isolation,
+            self.extra_build_requires,
+            &build_stack,
+            build_kind,
+            environment_variables,
+            build_output,
+            self.client.credentials_cache(),
+        )
+        .boxed_local()
+        .await?;
+        Ok(builder)
     }
 
+    #[cfg(not(feature = "source-build"))]
+    async fn direct_build<'data>(
+        &'data self,
+        _source: &'data Path,
+        _subdirectory: Option<&'data Path>,
+        _output_dir: &'data Path,
+        _sources: NoSources,
+        _build_kind: BuildKind,
+        _version_id: Option<&'data str>,
+    ) -> Result<Option<DistFilename>, BuildDispatchError> {
+        Ok(None)
+    }
+
+    #[cfg(feature = "source-build")]
     async fn direct_build<'data>(
         &'data self,
         source: &'data Path,
@@ -700,80 +779,67 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
-        #[cfg(not(feature = "source-build"))]
-        {
-            let _ = (
-                &source,
-                &subdirectory,
-                &output_dir,
-                &sources,
-                &build_kind,
-                &version_id,
-            );
+        let source_tree = if let Some(subdir) = subdirectory {
+            source.join(subdir)
+        } else {
+            source.to_path_buf()
+        };
+
+        // Only perform the direct build if the backend is uv in a compatible version.
+        let source_tree_str = source_tree.display().to_string();
+        let identifier = version_id.unwrap_or_else(|| &source_tree_str);
+        if let Err(reason) = check_direct_build(
+            &source_tree,
+            uv_version::version(),
+            &self.interpreter.to_resolver_marker_environment(),
+            self.constraints.requirements().cloned().map(Into::into),
+        ) {
+            trace!("Requirements for direct build not matched because {reason}");
             return Ok(None);
         }
-        #[cfg(feature = "source-build")]
-        {
-            let source_tree = if let Some(subdir) = subdirectory {
-                source.join(subdir)
-            } else {
-                source.to_path_buf()
+
+        debug!("Performing direct build for {identifier}");
+
+        let output_dir = output_dir.to_path_buf();
+        let tar_backend = self.tar_backend;
+        let filename = tokio::task::spawn_blocking(move || -> Result<_, BuildBackendError> {
+            let filename = match build_kind {
+                BuildKind::Wheel => {
+                    let wheel = uv_build_backend::build_wheel(
+                        &source_tree,
+                        &output_dir,
+                        None,
+                        uv_version::version(),
+                        sources.is_none(),
+                    )?;
+                    DistFilename::WheelFilename(wheel)
+                }
+                BuildKind::Sdist => {
+                    let source_dist = uv_build_backend::build_source_dist(
+                        &source_tree,
+                        &output_dir,
+                        uv_version::version(),
+                        sources.is_none(),
+                        tar_backend,
+                    )?;
+                    DistFilename::SourceDistFilename(source_dist)
+                }
+                BuildKind::Editable => {
+                    let wheel = uv_build_backend::build_editable(
+                        &source_tree,
+                        &output_dir,
+                        None,
+                        uv_version::version(),
+                        sources.is_none(),
+                    )?;
+                    DistFilename::WheelFilename(wheel)
+                }
             };
+            Ok(filename)
+        })
+        .await??;
 
-            // Only perform the direct build if the backend is uv in a compatible version.
-            let source_tree_str = source_tree.display().to_string();
-            let identifier = version_id.unwrap_or_else(|| &source_tree_str);
-            if let Err(reason) = check_direct_build(
-                &source_tree,
-                uv_version::version(),
-                &self.interpreter.to_resolver_marker_environment(),
-                self.constraints.requirements().cloned().map(Into::into),
-            ) {
-                trace!("Requirements for direct build not matched because {reason}");
-                return Ok(None);
-            }
-
-            debug!("Performing direct build for {identifier}");
-
-            let output_dir = output_dir.to_path_buf();
-            let filename = tokio::task::spawn_blocking(move || -> Result<_> {
-                let filename = match build_kind {
-                    BuildKind::Wheel => {
-                        let wheel = uv_build_backend::build_wheel(
-                            &source_tree,
-                            &output_dir,
-                            None,
-                            uv_version::version(),
-                            sources.is_none(),
-                        )?;
-                        DistFilename::WheelFilename(wheel)
-                    }
-                    BuildKind::Sdist => {
-                        let source_dist = uv_build_backend::build_source_dist(
-                            &source_tree,
-                            &output_dir,
-                            uv_version::version(),
-                            sources.is_none(),
-                        )?;
-                        DistFilename::SourceDistFilename(source_dist)
-                    }
-                    BuildKind::Editable => {
-                        let wheel = uv_build_backend::build_editable(
-                            &source_tree,
-                            &output_dir,
-                            None,
-                            uv_version::version(),
-                            sources.is_none(),
-                        )?;
-                        DistFilename::WheelFilename(wheel)
-                    }
-                };
-                Ok(filename)
-            })
-            .await??;
-
-            Ok(Some(filename))
-        }
+        Ok(Some(filename))
     }
 }
 
@@ -800,7 +866,7 @@ impl SharedState {
     /// State that is universally applicable (like the Git resolver and index capabilities)
     /// are retained.
     #[must_use]
-    pub fn fork(&self) -> Self {
+    fn fork(&self) -> Self {
         Self {
             git: self.git.clone(),
             capabilities: self.capabilities.clone(),
@@ -821,12 +887,60 @@ impl SharedState {
 
     /// Return mutable access to the index owner. Removing cached entries additionally requires
     /// exclusive access to the index's shared storage.
-    pub fn index_mut(&mut self) -> &mut InMemoryIndex {
+    fn index_mut(&mut self) -> &mut InMemoryIndex {
         &mut self.index
     }
 
     /// Return the [`InFlight`] used by the [`SharedState`].
     pub fn in_flight(&self) -> &InFlight {
         &self.in_flight
+    }
+}
+
+/// A [`SharedState`] instance to use for universal resolution.
+#[derive(Default, Clone)]
+pub struct UniversalState(SharedState);
+
+impl std::ops::Deref for UniversalState {
+    type Target = SharedState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl UniversalState {
+    /// Return mutable access to the index owner between lock operations.
+    pub fn index_mut(&mut self) -> &mut InMemoryIndex {
+        self.0.index_mut()
+    }
+
+    /// Fork the [`UniversalState`] to create a [`PlatformState`].
+    pub fn fork(&self) -> PlatformState {
+        PlatformState(self.0.fork())
+    }
+}
+
+/// A [`SharedState`] instance to use for platform-specific resolution.
+#[derive(Default, Clone)]
+pub struct PlatformState(SharedState);
+
+impl std::ops::Deref for PlatformState {
+    type Target = SharedState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PlatformState {
+    /// Fork the [`PlatformState`] to create a [`UniversalState`].
+    pub fn fork(&self) -> UniversalState {
+        UniversalState(self.0.fork())
+    }
+
+    /// Create a [`SharedState`] from the [`PlatformState`].
+    pub fn into_inner(self) -> SharedState {
+        self.0
     }
 }

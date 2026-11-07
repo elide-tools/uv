@@ -21,7 +21,7 @@ use tracing_tree::HierarchicalLayer;
 #[cfg(feature = "install-tracing-subscriber")]
 use tracing_tree::time::Uptime;
 
-use uv_cli::ColorChoice;
+use uv_configuration::ColorChoice;
 #[cfg(feature = "install-tracing-subscriber")]
 use uv_logging::{UvFormat, uv_fields};
 
@@ -34,18 +34,10 @@ pub(crate) enum Level {
     TraceAll,
 }
 
-/// Configure `tracing` based on the given [`Level`], taking into account the `RUST_LOG` environment
-/// variable.
+/// No-op when the `install-tracing-subscriber` feature is disabled.
 ///
-/// The [`Level`] is used to dictate the default filters (which can be overridden by the `RUST_LOG`
-/// environment variable) along with the formatting of the output. For example, [`Level::Verbose`]
-/// includes targets and timestamps, along with all `uv=debug` messages by default.
-/// No-op stub when the `install-tracing-subscriber` feature is disabled.
-///
-/// Tracing events continue to emit through the macros; the embedder is
-/// expected to install its own global `tracing_subscriber` that receives
-/// them. This form is used when uv runs alongside other tracing-emitting
-/// crates (orogene, Elide) that must share a single subscriber.
+/// Tracing events continue to emit through the macros; the embedder is expected to install its
+/// own global `tracing` subscriber, which receives them.
 #[cfg(not(feature = "install-tracing-subscriber"))]
 pub(crate) fn setup_logging(
     _level: Level,
@@ -56,6 +48,12 @@ pub(crate) fn setup_logging(
     Ok(())
 }
 
+/// Configure `tracing` based on the given [`Level`], taking into account the `RUST_LOG` environment
+/// variable.
+///
+/// The [`Level`] is used to dictate the default filters (which can be overridden by the `RUST_LOG`
+/// environment variable) along with the formatting of the output. For example, [`Level::Verbose`]
+/// includes targets and timestamps, along with all `uv=debug` messages by default.
 #[cfg(feature = "install-tracing-subscriber")]
 pub(crate) fn setup_logging(
     level: Level,
@@ -132,7 +130,7 @@ pub(crate) fn setup_logging(
             .with(durations_layer)
             .with(
                 tracing_subscriber::fmt::layer()
-                    .event_format(UvFormat::default())
+                    .event_format(UvFormat)
                     .fmt_fields(uv_fields())
                     .with_writer(writer)
                     .with_ansi(ansi)
