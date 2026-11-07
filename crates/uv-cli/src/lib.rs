@@ -1114,7 +1114,7 @@ pub enum Maybe<T> {
 }
 
 impl<T> Maybe<T> {
-    fn into_option(self) -> Option<T> {
+    pub fn into_option(self) -> Option<T> {
         match self {
             Self::Some(value) => Some(value),
             Self::None => None,
