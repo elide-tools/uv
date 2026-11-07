@@ -389,7 +389,7 @@ windows-version = { version = "0.100.0", default-features = false }
 wiremock = { version = "0.6.4", default-features = false }
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 zeroize = { version = "1.8.1", default-features = false, features = ["alloc"] }
-zstd = { version = "0.13.3", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 
 # dev-dependencies
 assert_cmd = { version = "2.0.16", default-features = false }
