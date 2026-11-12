@@ -12,6 +12,9 @@ pub struct BuildInfo {
     extra_build_requires: Vec<ExtraBuildRequirement>,
     #[serde(default, skip_serializing_if = "BuildVariables::is_empty")]
     extra_build_variables: BuildVariables,
+    /// Elide fork: the host's [`crate::NativeBuildToolchain`] identity, if one is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_toolchain: Option<String>,
 }
 
 impl CacheKey for BuildInfo {
@@ -19,6 +22,7 @@ impl CacheKey for BuildInfo {
         self.config_settings.cache_key(state);
         self.extra_build_requires.cache_key(state);
         self.extra_build_variables.cache_key(state);
+        self.native_toolchain.cache_key(state);
     }
 }
 
@@ -34,6 +38,8 @@ impl BuildInfo {
             config_settings,
             extra_build_requires: extra_build_dependencies,
             extra_build_variables: extra_build_variables.unwrap_or_default(),
+            native_toolchain: crate::native_build_toolchain()
+                .map(|toolchain| toolchain.identity().to_owned()),
         }
     }
 
@@ -42,6 +48,7 @@ impl BuildInfo {
         self.config_settings.is_empty()
             && self.extra_build_requires.is_empty()
             && self.extra_build_variables.is_empty()
+            && self.native_toolchain.is_none()
     }
 
     /// Return the cache shard for this [`BuildInfo`].

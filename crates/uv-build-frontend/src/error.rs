@@ -55,6 +55,9 @@ pub enum Error {
         "Extra build requirement `{0}` was declared with `match-runtime = true`, but `{1}` does not declare static metadata, making runtime-matching impossible"
     )]
     UnmatchedRuntime(PackageName, PackageName),
+    /// Elide fork: the embedding host refused source builds (`refuse_source_builds`).
+    #[error("Building source distributions is disabled")]
+    SourceBuildsRefused,
 }
 
 impl IsBuildBackendError for Error {
@@ -71,6 +74,7 @@ impl IsBuildBackendError for Error {
             | Self::BuildScriptPath(_)
             | Self::CyclicBuildDependency(_)
             | Self::UnmatchedRuntime(..)
+            | Self::SourceBuildsRefused
             | Self::Lowering(_) => true,
             Self::RequirementsResolve(_, error) | Self::RequirementsInstall(_, error) => {
                 error.is_user_failure()
@@ -92,7 +96,8 @@ impl IsBuildBackendError for Error {
             | Self::RequirementsInstall(_, _)
             | Self::Virtualenv(_)
             | Self::CyclicBuildDependency(_)
-            | Self::UnmatchedRuntime(_, _) => false,
+            | Self::UnmatchedRuntime(_, _)
+            | Self::SourceBuildsRefused => false,
             Self::CommandFailed(_, _)
             | Self::BuildBackend(_)
             | Self::MissingHeader(_)

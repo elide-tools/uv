@@ -1323,8 +1323,12 @@ impl PythonRunner {
         {
             command.args(["-X", "lazy_imports=all"]);
         }
+        let toolchain = uv_distribution_types::native_build_toolchain();
+        if let Some(toolchain) = &toolchain {
+            command.args(toolchain.interpreter_args());
+        }
 
-        let mut child = command
+        command
             .args(["-c", script])
             .current_dir(source_tree.simplified())
             .envs(environment_variables)
@@ -1355,8 +1359,8 @@ impl PythonRunner {
             // arbitrary PEP 517 build-backend code (`setup.py`'s top-level code, and
             // anything before the compiler is actually invoked, still executes with full
             // process access). It only guarantees that the "try to compile, fall back to
-            // pure Python" path can't accidentally succeed at compiling. Revisit once Elide
-            // supports real C extension builds.
+            // pure Python" path can't accidentally succeed at compiling, unless the host installs
+            // a `NativeBuildToolchain` (applied below).
             .env("CC", ELIDE_NO_C_COMPILER)
             .env("CXX", ELIDE_NO_C_COMPILER)
             .env("FC", ELIDE_NO_C_COMPILER)
@@ -1393,7 +1397,13 @@ impl PythonRunner {
             .env("ProgramFiles(x86)", ELIDE_NO_C_COMPILER)
             .env("ProgramFiles", ELIDE_NO_C_COMPILER)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // Elide fork: a host-installed toolchain replaces the unresolvable compiler; its identity
+        // scopes the built wheel in the cache (`BuildInfo`).
+        if let Some(toolchain) = &toolchain {
+            command.envs(toolchain.env().iter().map(|(key, value)| (key, value)));
+        }
+        let mut child = command
             .spawn()
             .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
 
