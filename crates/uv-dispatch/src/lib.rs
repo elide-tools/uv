@@ -692,6 +692,10 @@ impl BuildContext for BuildDispatch<'_> {
         build_output: BuildOutput,
         mut build_stack: BuildStack,
     ) -> Result<SourceBuild, uv_build_frontend::Error> {
+        // Elide fork: covers editables, which `--no-build` still lets through.
+        if uv_distribution_types::source_builds_refused() {
+            return Err(uv_build_frontend::Error::SourceBuildsRefused);
+        }
         let dist_name = dist.map(uv_distribution_types::Name::name);
         let dist_version = dist
             .map(uv_distribution_types::DistributionMetadata::version_or_url)
@@ -779,6 +783,10 @@ impl BuildContext for BuildDispatch<'_> {
         build_kind: BuildKind,
         version_id: Option<&'data str>,
     ) -> Result<Option<DistFilename>, BuildDispatchError> {
+        // Elide fork: decline, so `setup_build` reports the refusal.
+        if uv_distribution_types::source_builds_refused() {
+            return Ok(None);
+        }
         let source_tree = if let Some(subdir) = subdirectory {
             source.join(subdir)
         } else {
