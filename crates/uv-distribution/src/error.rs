@@ -163,6 +163,9 @@ pub enum Error {
     /// Elide fork: the host's source preparation command failed.
     #[error("Failed to prepare the source of `{0}` for building: {1}")]
     SourcePreparation(PackageName, String),
+    /// Elide fork: the host's wheel verification command rejected a built wheel.
+    #[error("The wheel built for `{0}` was rejected: {1}")]
+    WheelVerification(String, String),
     #[error("Failed to identify base Python interpreter")]
     BaseInterpreter(#[source] std::io::Error),
 
@@ -357,6 +360,7 @@ impl Error {
             | Self::CacheHeal(..)
             | Self::BaseInterpreter(_)
             | Self::SourcePreparation(..)
+            | Self::WheelVerification(..)
             | Self::Join(_)
             | Self::HashExhaustion(_) => false,
             Self::ReqwestMiddlewareError(error) => is_not_found_error(error.as_ref()),

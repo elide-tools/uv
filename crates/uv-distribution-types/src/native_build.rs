@@ -20,6 +20,7 @@ pub struct NativeBuildToolchain {
     identity: String,
     source_preparation: Option<Vec<OsString>>,
     preferred_versions: HashMap<PackageName, Ranges<Version>>,
+    wheel_verification: Option<Vec<OsString>>,
 }
 
 impl NativeBuildToolchain {
@@ -35,7 +36,20 @@ impl NativeBuildToolchain {
             identity,
             source_preparation: None,
             preferred_versions: HashMap::new(),
+            wheel_verification: None,
         }
+    }
+
+    /// Run `command <wheel>` on each wheel built from source; a failure fails the build and the
+    /// wheel is discarded. Lets the host confirm that its toolchain produced the binaries.
+    #[must_use]
+    pub fn with_wheel_verification(mut self, command: Vec<OsString>) -> Self {
+        self.wheel_verification = Some(command);
+        self
+    }
+
+    pub fn wheel_verification(&self) -> Option<&[OsString]> {
+        self.wheel_verification.as_deref()
     }
 
     /// Versions the resolver tries first, as `(package, specifiers)` pairs: typically those the
