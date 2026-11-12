@@ -140,14 +140,35 @@ impl CandidateSelector {
             return Some(installed);
         }
 
+        // Elide fork: among the versions in range, first try those the host's native build
+        // toolchain prefers.
+        let preferred = uv_distribution_types::native_build_toolchain()
+            .and_then(|toolchain| {
+                toolchain
+                    .preferred_versions(package_name)
+                    .map(|preferred| range.intersection(&Range::from_versions(preferred.clone())))
+            })
+            .filter(|preferred| !preferred.is_empty())
+            .and_then(|preferred| {
+                self.select_no_preference_with(
+                    package_name,
+                    &preferred,
+                    version_maps,
+                    prerelease_selection,
+                    env,
+                )
+            });
+
         // Otherwise, find the best candidate from the version maps.
-        let compatible = self.select_no_preference_with(
-            package_name,
-            range,
-            version_maps,
-            prerelease_selection,
-            env,
-        );
+        let compatible = preferred.or_else(|| {
+            self.select_no_preference_with(
+                package_name,
+                range,
+                version_maps,
+                prerelease_selection,
+                env,
+            )
+        });
 
         // Cross-reference against the already-installed distribution.
         //
