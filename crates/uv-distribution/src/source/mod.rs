@@ -3073,6 +3073,26 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         validate_metadata(source, &metadata)?;
         validate_filename(&filename, &metadata)?;
 
+        // Elide fork: let the host's native build toolchain inspect the wheel before it is cached.
+        if let Some(toolchain) = uv_distribution_types::native_build_toolchain()
+            && let Some((program, arguments)) =
+                toolchain.wheel_verification().and_then(<[_]>::split_first)
+        {
+            let output = tokio::process::Command::new(program)
+                .args(arguments)
+                .arg(temp_dir.path().join(&disk_filename))
+                .envs(toolchain.env().iter().map(|(key, value)| (key, value)))
+                .output()
+                .await
+                .map_err(|err| Error::WheelVerification(source.to_string(), err.to_string()))?;
+            if !output.status.success() {
+                return Err(Error::WheelVerification(
+                    source.to_string(),
+                    String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                ));
+            }
+        }
+
         // Move the wheel to the cache.
         rename_with_retry(
             temp_dir.path().join(&disk_filename),
