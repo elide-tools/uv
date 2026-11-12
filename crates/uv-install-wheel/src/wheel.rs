@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -30,6 +31,16 @@ use crate::script::{EntryPoints, Script};
 use crate::{Error, Layout};
 
 const SHELL_SHEBANG: &str = "#!/bin/sh\n";
+
+/// Elide fork: the `elide` binary chooses a script's language by file extension. Console scripts
+/// have none, so when it is the interpreter they name its `python` command after the executable.
+fn elide_python_command(executable: impl AsRef<Path>) -> &'static str {
+    if executable.as_ref().file_stem() == Some(OsStr::new("elide")) {
+        " python"
+    } else {
+        ""
+    }
+}
 
 /// A Python source encoding declaration, as defined by <https://peps.python.org/pep-0263/#defining-the-encoding>.
 static SCRIPT_ENCODING: LazyLock<dense::DFA<Vec<u32>>> = LazyLock::new(|| {
@@ -128,32 +139,34 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
 fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool) -> String {
     // Convert the executable to a simplified path.
     let executable = executable.as_ref().simplified_display().to_string();
+    let command = elide_python_command(&executable);
 
     // Validate the shebang.
     if os_name == "posix" {
         // The length of the full line: the shebang, plus the leading `#` and `!`, and a trailing
         // newline.
-        let shebang_length = 2 + executable.len() + 1;
+        let shebang_length = 2 + executable.len() + command.len() + 1;
 
         // If the shebang is too long, or contains spaces, wrap it in `/bin/sh`.
         // Same applies for relocatable scripts (executable is relative to script dir, hence `dirname` trick)
         // (note: the Windows trampoline binaries natively support relative paths to executable)
         if shebang_length > 127 || executable.contains(' ') || relocatable {
             let executable = format!("'{}'", escape_posix_for_single_quotes(&executable));
-            return format_shell_shebang(&executable, relocatable);
+            return format_shell_shebang(&executable, command, relocatable);
         }
+        return format!("#!{executable}{command}");
     }
 
     format!("#!{executable}")
 }
 
-fn format_shell_shebang(executable: &str, relocatable: bool) -> String {
+fn format_shell_shebang(executable: &str, command: &str, relocatable: bool) -> String {
     let prefix = if relocatable {
         r#""$(dirname -- "$(realpath -- "$0")")"/"#
     } else {
         ""
     };
-    format!("{SHELL_SHEBANG}'''exec' {prefix}{executable} \"$0\" \"$@\"\n' '''")
+    format!("{SHELL_SHEBANG}'''exec' {prefix}{executable}{command} \"$0\" \"$@\"\n' '''")
 }
 
 /// Quote a shell executable so its path cannot become Python syntax after source decoding.
@@ -646,8 +659,9 @@ fn install_script(
         let size_and_encoded_hash = if let Some(encoding) = encoding {
             let mut encoding_source = File::open(&path)?;
             encoding_source.seek(SeekFrom::Start(encoding.start))?;
+            let command = elide_python_command(&executable);
             let executable = quote_executable_for_encoded_script(&executable);
-            let shebang = format_shell_shebang(&executable, relocatable);
+            let shebang = format_shell_shebang(&executable, command, relocatable);
             let (shebang, launcher) = shebang.split_at(SHELL_SHEBANG.len());
             let mut contents = shebang
                 .as_bytes()
@@ -1472,6 +1486,23 @@ mod test {
         assert_eq!(
             format_shebang(executable, os_name, false),
             "#!/usr/bin/'python3'"
+        );
+
+        // Elide's own binary runs scripts through its `python` command.
+        let executable = Path::new("/opt/elide/bin/elide");
+        let os_name = "posix";
+        assert_eq!(
+            format_shebang(executable, os_name, false),
+            "#!/opt/elide/bin/elide python"
+        );
+        let executable = Path::new("/opt/my tools/bin/elide");
+        assert_eq!(
+            format_shebang(executable, os_name, false),
+            indoc! {r#"
+                #!/bin/sh
+                '''exec' '/opt/my tools/bin/elide' python "$0" "$@"
+                ' '''"#
+            }
         );
 
         // If the path is too long, we should not use the `exec` trick.
