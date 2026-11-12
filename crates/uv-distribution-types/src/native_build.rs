@@ -1,9 +1,14 @@
 //! Elide fork: a native compiler toolchain supplied by an embedding host for PEP 517 builds.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use uv_cache_key::cache_digest;
+use uv_normalize::PackageName;
+use uv_pep440::{Version, VersionSpecifiers};
+use version_ranges::Ranges;
 
 /// Environment a build backend receives in place of the unresolvable compiler, interpreter
 /// arguments it needs to see that environment, and the identity that scopes wheels built with it
@@ -14,6 +19,7 @@ pub struct NativeBuildToolchain {
     interpreter_args: Vec<OsString>,
     identity: String,
     source_preparation: Option<Vec<OsString>>,
+    preferred_versions: HashMap<PackageName, Ranges<Version>>,
 }
 
 impl NativeBuildToolchain {
@@ -28,7 +34,36 @@ impl NativeBuildToolchain {
             interpreter_args,
             identity,
             source_preparation: None,
+            preferred_versions: HashMap::new(),
         }
+    }
+
+    /// Versions the resolver tries first, as `(package, specifiers)` pairs: typically those the
+    /// source preparation has patches for. Several entries for a package are alternatives.
+    /// Entries that do not parse are ignored.
+    #[must_use]
+    pub fn with_preferred_versions(
+        mut self,
+        preferences: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        for (name, specifiers) in preferences {
+            let (Ok(name), Ok(specifiers)) = (
+                PackageName::from_str(&name),
+                VersionSpecifiers::from_str(&specifiers),
+            ) else {
+                continue;
+            };
+            let range = Ranges::from(specifiers);
+            self.preferred_versions
+                .entry(name)
+                .and_modify(|preferred| *preferred = preferred.union(&range))
+                .or_insert(range);
+        }
+        self
+    }
+
+    pub fn preferred_versions(&self, name: &PackageName) -> Option<&Ranges<Version>> {
+        self.preferred_versions.get(name)
     }
 
     /// Run `command <name> <version> <directory>` on a copy of each unpacked source distribution
