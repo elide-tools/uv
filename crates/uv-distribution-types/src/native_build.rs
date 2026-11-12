@@ -3,6 +3,8 @@
 use std::ffi::OsString;
 use std::sync::{Arc, RwLock};
 
+use uv_cache_key::cache_digest;
+
 /// Environment a build backend receives in place of the unresolvable compiler, interpreter
 /// arguments it needs to see that environment, and the identity that scopes wheels built with it
 /// in the cache.
@@ -11,6 +13,7 @@ pub struct NativeBuildToolchain {
     env: Vec<(OsString, OsString)>,
     interpreter_args: Vec<OsString>,
     identity: String,
+    source_preparation: Option<Vec<OsString>>,
 }
 
 impl NativeBuildToolchain {
@@ -24,7 +27,26 @@ impl NativeBuildToolchain {
             env,
             interpreter_args,
             identity,
+            source_preparation: None,
         }
+    }
+
+    /// Run `command <name> <version> <directory>` on a copy of each unpacked source distribution
+    /// before building it, so the host can patch the source. `identity` must cover what the
+    /// command does.
+    #[must_use]
+    pub fn with_source_preparation(mut self, command: Vec<OsString>) -> Self {
+        self.source_preparation = Some(command);
+        self
+    }
+
+    pub fn source_preparation(&self) -> Option<&[OsString]> {
+        self.source_preparation.as_deref()
+    }
+
+    /// A digest of [`Self::identity`], for cache paths.
+    pub fn digest(&self) -> String {
+        cache_digest(&self.identity)
     }
 
     pub fn env(&self) -> &[(OsString, OsString)] {

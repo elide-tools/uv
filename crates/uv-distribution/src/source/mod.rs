@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -2945,6 +2945,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         }
 
+        let source_root = self.prepared_source_root(source, source_root).await?;
+        let source_root = source_root.as_path();
+
         // Build into a temporary directory, to prevent partial builds.
         let temp_dir = self
             .build_context
@@ -3082,6 +3085,65 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok((disk_filename, filename, metadata))
     }
 
+    /// Elide fork: the source to build from. If the host's
+    /// [`uv_distribution_types::NativeBuildToolchain`] prepares sources, that is a copy of the
+    /// unpacked distribution, prepared once per toolchain and kept beside it in the cache; the
+    /// unpacked distribution itself stays as published.
+    ///
+    /// Only distributions with a known name and version are prepared, which excludes source
+    /// trees: those belong to the user.
+    async fn prepared_source_root(
+        &self,
+        source: &BuildableSource<'_>,
+        source_root: &Path,
+    ) -> Result<PathBuf, Error> {
+        let Some(toolchain) = uv_distribution_types::native_build_toolchain() else {
+            return Ok(source_root.to_path_buf());
+        };
+        let (Some((program, arguments)), Some(name), Some(version)) = (
+            toolchain.source_preparation().and_then(<[_]>::split_first),
+            source.name(),
+            source.version(),
+        ) else {
+            return Ok(source_root.to_path_buf());
+        };
+        let prepared = source_root.with_file_name(format!("{SOURCE}-{}", toolchain.digest()));
+        if prepared.is_dir() {
+            return Ok(prepared);
+        }
+        debug!("Preparing source for: {source}");
+
+        // Prepare a staged copy, so an interrupted preparation is never built.
+        let cache_dir = prepared.parent().unwrap_or(source_root);
+        let temp_dir = tempfile::tempdir_in(cache_dir).map_err(Error::CacheWrite)?;
+        let staged = temp_dir.path().join(SOURCE);
+        let (from, to) = (source_root.to_path_buf(), staged.clone());
+        tokio::task::spawn_blocking(move || uv_fs::copy_dir_all(from, to))
+            .await?
+            .map_err(Error::CacheWrite)?;
+
+        let output = tokio::process::Command::new(program)
+            .args(arguments)
+            .arg(name.as_ref())
+            .arg(version.to_string())
+            .arg(&staged)
+            .envs(toolchain.env().iter().map(|(key, value)| (key, value)))
+            .output()
+            .await
+            .map_err(|err| Error::SourcePreparation(name.clone(), err.to_string()))?;
+        if !output.status.success() {
+            return Err(Error::SourcePreparation(
+                name.clone(),
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        rename_with_retry(&staged, &prepared)
+            .await
+            .map_err(Error::CacheWrite)?;
+        Ok(prepared)
+    }
+
     /// Build the metadata for a source distribution.
     #[instrument(skip_all, fields(dist = %source))]
     async fn build_metadata(
@@ -3129,6 +3191,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 ));
             }
         }
+
+        let source_root = self.prepared_source_root(source, source_root).await?;
+        let source_root = source_root.as_path();
 
         // Identify the base Python interpreter to use in the cache key.
         let base_python = if cfg!(unix) {
