@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
@@ -18,6 +19,7 @@ pub struct NativeBuildToolchain {
     env: Vec<(OsString, OsString)>,
     interpreter_args: Vec<OsString>,
     identity: String,
+    path: Vec<PathBuf>,
     source_preparation: Option<Vec<OsString>>,
     preferred_versions: HashMap<PackageName, Ranges<Version>>,
     wheel_verification: Option<Vec<OsString>>,
@@ -34,10 +36,23 @@ impl NativeBuildToolchain {
             env,
             interpreter_args,
             identity,
+            path: Vec::new(),
             source_preparation: None,
             preferred_versions: HashMap::new(),
             wheel_verification: None,
         }
+    }
+
+    /// Directories searched before the build environment's own `PATH`, so tools a backend runs
+    /// by bare name (`cc`, `ar`, `cargo`) resolve to the host's toolchain.
+    #[must_use]
+    pub fn with_path(mut self, directories: Vec<PathBuf>) -> Self {
+        self.path = directories;
+        self
+    }
+
+    pub fn path(&self) -> &[PathBuf] {
+        &self.path
     }
 
     /// Run `command <wheel>` on each wheel built from source; a failure fails the build and the

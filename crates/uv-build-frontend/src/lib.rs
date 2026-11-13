@@ -1402,6 +1402,17 @@ impl PythonRunner {
         // scopes the built wheel in the cache (`BuildInfo`).
         if let Some(toolchain) = &toolchain {
             command.envs(toolchain.env().iter().map(|(key, value)| (key, value)));
+            if !toolchain.path().is_empty() {
+                let path = toolchain
+                    .path()
+                    .iter()
+                    .cloned()
+                    .chain(env::split_paths(modified_path));
+                command.env(
+                    EnvVars::PATH,
+                    env::join_paths(path).map_err(Error::BuildScriptPath)?,
+                );
+            }
         }
         let mut child = command
             .spawn()
