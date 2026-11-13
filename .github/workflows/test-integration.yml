@@ -49,7 +49,7 @@ jobs:
           echo "${{ github.workspace }}/nu-${nu_tag}-x86_64-unknown-linux-gnu" >> "${GITHUB_PATH}"
 
       - name: Download binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -81,7 +81,7 @@ jobs:
           python-version: "3.12"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -103,6 +103,7 @@ jobs:
     timeout-minutes: 10
     runs-on: macos-15-intel # github-macos-15-x86_64-4
     steps:
+      - uses: astral-sh/github-actions/demudhra@7aa50a3def9f5428c532b0ae972d1e5b357de5a5 # 2026.11.03.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -114,7 +115,7 @@ jobs:
           python-version: "3.12"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-macos-x86_64-${{ inputs.sha }}
 
@@ -155,7 +156,7 @@ jobs:
           sudo apt-get install python3.9
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -193,7 +194,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-armv7-gnueabihf-${{ inputs.sha }}
 
@@ -233,7 +234,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -277,7 +278,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-aarch64-${{ inputs.sha }}
 
@@ -323,7 +324,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-aarch64-${{ inputs.sha }}
 
@@ -367,7 +368,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -394,7 +395,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -411,7 +412,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -484,7 +485,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends wine wine64
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -508,7 +509,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -570,7 +571,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -637,7 +638,7 @@ jobs:
 
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -694,7 +695,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -753,7 +754,7 @@ jobs:
       PYODIDE_XBUILDENV_PATH: D:\pyodide-xbuildenv
     steps:
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -788,7 +789,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-musl-${{ inputs.sha }}
 
@@ -813,7 +814,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
@@ -845,7 +846,7 @@ jobs:
           python-version: "3.12.7"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -902,7 +903,7 @@ jobs:
           python-version: "3.13t"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -949,7 +950,7 @@ jobs:
           persist-credentials: false
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-musl-${{ inputs.sha }}
 
@@ -1006,7 +1007,7 @@ jobs:
           python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -1055,7 +1056,7 @@ jobs:
           python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -1085,9 +1086,6 @@ jobs:
         uses: "google-github-actions/auth@fc2174804b84f912b1f6d334e9463f484f1c552d"
         with:
           credentials_json: "${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}"
-
-      - name: "Set up GCP SDK"
-        uses: "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db"
 
       - name: "Get GCP Artifact Registry token"
         id: get_token
@@ -1170,7 +1168,7 @@ jobs:
           python-version: "${{ env.PYTHON_VERSION }}"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -1222,7 +1220,7 @@ jobs:
           python-version: "3.14"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-linux-libc-${{ inputs.sha }}
 
@@ -1240,6 +1238,7 @@ jobs:
     timeout-minutes: 10
     runs-on: macos-15
     steps:
+      - uses: astral-sh/github-actions/demudhra@7aa50a3def9f5428c532b0ae972d1e5b357de5a5 # 2026.11.03.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1249,7 +1248,7 @@ jobs:
           python-version: "3.14"
 
       - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: uv-macos-aarch64-${{ inputs.sha }}
 
