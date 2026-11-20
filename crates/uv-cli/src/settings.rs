@@ -571,9 +571,7 @@ impl InitSettings {
 
         let bare = resolve_flag(bare, "bare", environment.init_bare).is_enabled();
 
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let no_description = no_description || (bare && description.is_none());
 
@@ -843,8 +841,7 @@ impl RunSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -1053,9 +1050,8 @@ impl ToolRunSettings {
                 .unwrap_or_default(),
         ));
 
-        let filesystem_install_mirrors = filesystem_options
-            .map(|options| options.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors =
+            filesystem_options.map_or_default(|options| options.install_mirrors);
 
         let mut settings = ResolverInstallerSettings::from(options.clone());
         if torch_backend.is_some() {
@@ -1184,9 +1180,8 @@ impl ToolInstallSettings {
                 .unwrap_or_default(),
         ));
 
-        let filesystem_install_mirrors = filesystem_options
-            .map(|options| options.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors =
+            filesystem_options.map_or_default(|options| options.install_mirrors);
 
         let mut settings = ResolverInstallerSettings::from(options.clone());
         if torch_backend.is_some() {
@@ -1309,8 +1304,7 @@ impl ToolUpgradeSettings {
         let filesystem = filesystem.map(FilesystemOptions::into_options);
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|options| options.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|options| options.install_mirrors.clone());
         let top_level = ResolverInstallerOptions::from(
             filesystem
                 .map(|options| options.top_level)
@@ -1534,9 +1528,7 @@ impl PythonListSettings {
             python_downloads_json_url: python_downloads_json_url_arg,
         } = args;
 
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let install_mirrors = PythonInstallMirrors {
             python_downloads_json_url: python_downloads_json_url_arg,
@@ -1608,9 +1600,7 @@ impl PythonInstallSettings {
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let install_mirrors = args
             .install_mirrors()
@@ -1693,9 +1683,7 @@ impl PythonUpgradeSettings {
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let install_mirrors = args
             .install_mirrors()
@@ -1802,9 +1790,7 @@ impl PythonFindSettings {
             python_downloads_json_url,
         } = args;
 
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let install_mirrors = PythonInstallMirrors {
             python_downloads_json_url,
@@ -1862,9 +1848,7 @@ impl PythonPinSettings {
             python_downloads_json_url,
         } = args;
 
-        let filesystem_install_mirrors = filesystem
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+        let filesystem_install_mirrors = filesystem.map_or_default(|fs| fs.install_mirrors.clone());
 
         let install_mirrors = PythonInstallMirrors {
             python_downloads_json_url,
@@ -1967,8 +1951,7 @@ impl SyncSettings {
         } = args;
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
         let settings =
@@ -2144,8 +2127,7 @@ impl LockSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(
@@ -2206,8 +2188,7 @@ impl UpgradeSettings {
     ) -> anyhow::Result<Self> {
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
         let (packages, exclude, options) =
             upgrade_options(args, configured_indexes(filesystem.as_ref()))?;
         let mut settings = combine_resolver_settings(options, filesystem, &environment);
@@ -2272,8 +2253,7 @@ impl MetadataSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -2483,8 +2463,7 @@ impl AddSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         let bounds = bounds.or(filesystem.as_ref().and_then(|fs| fs.add.add_bounds));
         let lfs = GitLfsSetting::new(lfs.then_some(true), environment.lfs);
@@ -2646,8 +2625,7 @@ impl RemoveSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         let packages = packages
             .into_iter()
@@ -2742,8 +2720,7 @@ impl VersionSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -2845,8 +2822,7 @@ impl TreeSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -2991,8 +2967,7 @@ impl ExportSettings {
         } = args;
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -3206,8 +3181,7 @@ impl CheckSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
         let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
@@ -3339,8 +3313,7 @@ impl AuditSettings {
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
+            .map_or_default(|fs| fs.install_mirrors.clone());
 
         let filesystem_audit = filesystem
             .as_ref()

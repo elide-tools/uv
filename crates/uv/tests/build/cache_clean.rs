@@ -373,7 +373,7 @@ fn clean_package_pypi() -> Result<()> {
     // Assert that the `.rkyv` file is created for `iniconfig`.
     let rkyv = context
         .cache_dir
-        .child("simple-v27")
+        .child("simple-v28")
         .child("pypi")
         .child("iniconfig.rkyv");
     assert!(
@@ -439,7 +439,7 @@ fn clean_package_index() -> Result<()> {
     // Assert that the `.rkyv` file is created for `iniconfig`.
     let rkyv = context
         .cache_dir
-        .child("simple-v27")
+        .child("simple-v28")
         .child("index")
         .child("e8208120cae3ba69")
         .child("iniconfig.rkyv");
@@ -474,7 +474,7 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     let archive_entry = context.cache_dir.child("archive-v0").child("archive");
     let package_entry = context
         .cache_dir
-        .child("wheels-v7")
+        .child("wheels-v8")
         .child("pypi")
         .child("demo");
 
@@ -594,7 +594,7 @@ fn clean_handles_verbatim_paths() -> Result<()> {
     // Cached sdist path resembling the uwsgi==2.0.31 build failure.
     let uwsgi_shard = context
         .cache_dir
-        .child("sdists-v10")
+        .child("sdists-v11")
         .child("pypi")
         .child("uwsgi")
         .child("2.0.31")
