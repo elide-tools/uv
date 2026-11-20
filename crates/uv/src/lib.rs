@@ -3388,36 +3388,46 @@ where
 
     match result {
         Ok(code) => code.into(),
-        Err(err) => {
-            let error = match err.downcast::<UvError>() {
-                Ok(error) => error,
-                Err(err) if err.is::<ArgumentError>() => UvError::argument(err),
-                Err(err) => UvError::unexpected(err),
-            };
-            match error {
-                UvError::User(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Failure.into()
-                }
-                UvError::Argument(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Error.into()
-                }
-                UvError::Unexpected(err) => {
-                    trace!(
-                        "Error chain:\n{}",
-                        uv_errors::debug_error_chain(err.as_ref())
-                    );
-                    if err.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
-                        trace!("Error backtrace:\n{}", err.backtrace());
-                    }
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Error.into()
-                }
-            }
-        }
+        Err(err) => report_error(err, printer).into(),
     }
+}
+
+/// Run a uv invocation, rendering a failure as the uv binary does: its hints, its exit status,
+/// and the resolved color choice.
+#[doc(hidden)]
+pub async fn run_and_report(cli: Cli, global_initialization: GlobalInitialization) -> ExitStatus {
+    let printer = Printer::new(
+        cli.top_level.global_args.quiet,
+        cli.top_level.global_args.verbose,
+        cli.top_level.global_args.no_progress,
+    );
+    match run(cli, global_initialization).await {
+        Ok(status) => status,
+        Err(err) => report_error(err, printer),
+    }
+}
+
+fn report_error(err: anyhow::Error, printer: Printer) -> ExitStatus {
+    let error = match err.downcast::<UvError>() {
+        Ok(error) => error,
+        Err(err) if err.is::<ArgumentError>() => UvError::argument(err),
+        Err(err) => UvError::unexpected(err),
+    };
+    let (err, status) = match error {
+        UvError::User(err) => (err, ExitStatus::Failure),
+        UvError::Argument(err) => (err, ExitStatus::Error),
+        UvError::Unexpected(err) => {
+            trace!(
+                "Error chain:\n{}",
+                uv_errors::debug_error_chain(err.as_ref())
+            );
+            if err.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
+                trace!("Error backtrace:\n{}", err.backtrace());
+            }
+            (err, ExitStatus::Error)
+        }
+    };
+    commands::diagnostics::write_error_chain(&err, printer)
+        .expect("writing to stderr should not fail");
+    status
 }
